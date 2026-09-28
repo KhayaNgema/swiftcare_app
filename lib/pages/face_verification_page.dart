@@ -1,8 +1,10 @@
+
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:didit_sdk/sdk_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
 class FaceVerificationPage extends StatefulWidget {
@@ -13,28 +15,25 @@ class FaceVerificationPage extends StatefulWidget {
       _FaceVerificationPageState();
 }
 
-class _FaceVerificationPageState
-    extends State<FaceVerificationPage> {
-  // ============================================================
-  // COLORS
-  // ============================================================
-
-  static const Color forestGreen = Color(0xFF1B5E20);
-  static const Color darkGreen = Color(0xFF124116);
-  static const Color logoGreen = Color(0xFF155F30);
-  static const Color mediumGreen = Color(0xFF2E7D32);
-  static const Color limeGreen = Color(0xFF8BC34A);
-  static const Color lightGreen = Color(0xFFDCEDC8);
-  static const Color paleGreen = Color(0xFFF0FDF4);
-  static const Color borderGreen = Color(0xFFD5E7D6);
-  static const Color textGreen = Color(0xFF4B6350);
-
+class _FaceVerificationPageState extends State<FaceVerificationPage> {
   // ============================================================
   // API
   // ============================================================
 
   static const String _apiBaseUrl =
       'https://flop-enjoyment-unexposed.ngrok-free.dev';
+
+  // ============================================================
+  // COLORS
+  // ============================================================
+
+  static const Color _darkGreen = Color(0xFF1B5E20);
+  static const Color _deepGreen = Color(0xFF124116);
+  static const Color _green = Color(0xFF2E7D32);
+  static const Color _lime = Color(0xFF8BC34A);
+  static const Color _lightGreen = Color(0xFFDCEDC8);
+  static const Color _background = Color(0xFFF0FDF4);
+  static const Color _border = Color(0xFFD5E7D6);
 
   // ============================================================
   // STATE
@@ -45,48 +44,63 @@ class _FaceVerificationPageState
   bool _isSuccess = false;
   bool _diditRunning = false;
 
+  bool _leavingPage = false;
+  bool _loginHandled = false;
+  bool _pollInProgress = false;
+
   String? _errorMessage;
   String? _sessionId;
 
+  Position? _currentPosition;
+
   Timer? _pollTimer;
 
-  bool _leavingPage = false;
-
   // ============================================================
-  // LOGIN HANDLING LOCK
-  // ============================================================
-
-  bool _loginHandled = false;
-
-  // ============================================================
-  // POLLING LOCK
-  // ============================================================
-
-  bool _pollInProgress = false;
-
-  // ============================================================
-  // INIT
+  // INIT / DISPOSE
   // ============================================================
 
   @override
   void initState() {
     super.initState();
-
     _startFaceLogin();
   }
-
-  // ============================================================
-  // DISPOSE
-  // ============================================================
 
   @override
   void dispose() {
     _leavingPage = true;
-
-    _pollTimer?.cancel();
-    _pollTimer = null;
-
+    _stopPolling();
+    _currentPosition = null;
     super.dispose();
+  }
+
+  // ============================================================
+  // LOCATION
+  // ============================================================
+
+  Future<Position> _getCurrentLocation() async {
+    final serviceEnabled =
+        await Geolocator.isLocationServiceEnabled();
+
+    if (!serviceEnabled) {
+      throw StateError('Location services are disabled.');
+    }
+
+    var permission = await Geolocator.checkPermission();
+
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      throw StateError('Location permission was not granted.');
+    }
+
+    return Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+      ),
+    ).timeout(const Duration(seconds: 20));
   }
 
   // ============================================================
@@ -94,472 +108,170 @@ class _FaceVerificationPageState
   // ============================================================
 
   Future<void> _startFaceLogin() async {
-    if (_leavingPage) {
-      return;
-    }
+    if (_leavingPage) return;
 
-    _pollTimer?.cancel();
-    _pollTimer = null;
+    _stopPolling();
 
-    _pollInProgress = false;
     _loginHandled = false;
+    _pollInProgress = false;
+    _sessionId = null;
+    _currentPosition = null;
 
-    if (!mounted) {
-      return;
+    if (mounted) {
+      setState(() {
+        _isStarting = true;
+        _isChecking = false;
+        _isSuccess = false;
+        _diditRunning = false;
+        _errorMessage = null;
+      });
     }
-
-    setState(() {
-      _isStarting = true;
-      _isChecking = false;
-      _isSuccess = false;
-      _diditRunning = false;
-
-      _errorMessage = null;
-      _sessionId = null;
-    });
 
     try {
-      // ========================================================
-      // START SWIFTCARE FACE LOGIN SESSION
-      // ========================================================
+      // Capture once for this login attempt.
+      final position = await _getCurrentLocation();
 
-      final uri = Uri.parse(
-        '$_apiBaseUrl/api/Auth/face-login',
-      );
+      if (_leavingPage) return;
 
-      debugPrint(
-        '==========================================',
-      );
+      _currentPosition = position;
 
-      debugPrint(
-        'STARTING FACE LOGIN',
-      );
+      // Create the Didit session.
+      // Coordinates are NOT sent to this POST action.
+      final response = await http.post(
+        Uri.parse('$_apiBaseUrl/api/Auth/face-login'),
+        headers: const {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(<String, dynamic>{}),
+      ).timeout(const Duration(seconds: 30));
 
-      debugPrint(
-        'POST: $uri',
-      );
+      if (_leavingPage) return;
 
-      final response = await http
-          .post(
-            uri,
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode({}),
-          )
-          .timeout(
-            const Duration(seconds: 30),
-          );
+      final data = _decodeResponse(response);
 
-      debugPrint(
-        'FACE LOGIN START STATUS: '
-        '${response.statusCode}',
-      );
-
-      if (!mounted || _leavingPage) {
-        return;
-      }
-
-      Map<String, dynamic> data = {};
-
-      try {
-        final decoded = jsonDecode(
-          response.body,
-        );
-
-        if (decoded is Map<String, dynamic>) {
-          data = decoded;
-        }
-      } catch (e) {
-        debugPrint(
-          'Could not decode face-login response: $e',
+      if (response.statusCode < 200 ||
+          response.statusCode >= 300) {
+        throw StateError(
+          _serverMessage(
+            data,
+            'Unable to start face verification.',
+          ),
         );
       }
 
-      // ========================================================
-      // API ERROR
-      // ========================================================
-
-      if (response.statusCode != 200) {
-        if (!mounted || _leavingPage) {
-          return;
-        }
-
-        setState(() {
-          _isStarting = false;
-          _isChecking = false;
-
-          _errorMessage =
-              data['message']?.toString() ??
-              data['error']?.toString() ??
-              'Unable to start face verification.';
-        });
-
-        return;
+      if (data == null) {
+        throw StateError(
+          'The server returned an invalid response.',
+        );
       }
 
-      // ========================================================
-      // SESSION ID
-      // ========================================================
+      final sessionId = data['sessionId']?.toString();
+      final sessionToken = data['sessionToken']?.toString();
 
-      final sessionId =
-          data['sessionId']?.toString();
-
-      // ========================================================
-      // DIDIT SESSION TOKEN
-      // ========================================================
-
-      final sessionToken =
-          data['sessionToken']?.toString();
-
-      if (sessionId == null ||
-          sessionId.trim().isEmpty) {
-        if (!mounted || _leavingPage) {
-          return;
-        }
-
-        setState(() {
-          _isStarting = false;
-          _isChecking = false;
-
-          _errorMessage =
-              'SwiftCare did not return a Didit session ID.';
-        });
-
-        return;
+      if (sessionId == null || sessionId.isEmpty) {
+        throw StateError(
+          'The server did not return a verification session.',
+        );
       }
 
-      if (sessionToken == null ||
-          sessionToken.trim().isEmpty) {
-        if (!mounted || _leavingPage) {
-          return;
-        }
-
-        setState(() {
-          _isStarting = false;
-          _isChecking = false;
-
-          _errorMessage =
-              'SwiftCare did not return a Didit session token.';
-        });
-
-        return;
+      if (sessionToken == null || sessionToken.isEmpty) {
+        throw StateError(
+          'The server did not return a verification token.',
+        );
       }
-
-      debugPrint(
-        'Didit Session ID: $sessionId',
-      );
-
-      debugPrint(
-        'Didit session token received.',
-      );
 
       _sessionId = sessionId;
 
-      // ========================================================
-      // PREPARE NATIVE DIDIT SDK
-      // ========================================================
-
-      if (!mounted || _leavingPage) {
-        return;
+      if (mounted) {
+        setState(() {
+          _isStarting = false;
+          _isChecking = true;
+          _diditRunning = true;
+        });
       }
 
-      setState(() {
-        _isStarting = false;
-        _isChecking = true;
-        _diditRunning = true;
-        _errorMessage = null;
-      });
-
-      // ========================================================
-      // START BACKEND POLLING
-      // ========================================================
-
+      // Polling now sends the coordinates as query parameters.
       _startPolling();
 
-      debugPrint(
-        '==========================================',
-      );
-
-      debugPrint(
-        'STARTING NATIVE DIDIT SDK',
-      );
-
-      debugPrint(
-        'Session ID: $sessionId',
-      );
-
-      debugPrint(
-        '==========================================',
-      );
-
-      // ========================================================
-      // START NATIVE DIDIT VERIFICATION
-      // ========================================================
-
-      final result =
-          await DiditSdk.startVerification(
+      final result = await DiditSdk.startVerification(
         sessionToken,
         config: const DiditConfig(
           loggingEnabled: false,
         ),
       );
 
-      if (!mounted || _leavingPage) {
-        return;
-      }
+      if (_leavingPage || _loginHandled) return;
 
-      _diditRunning = false;
+      await _handleDiditResult(result);
+    } on TimeoutException {
+      if (_leavingPage || _loginHandled) return;
 
-      // ========================================================
-      // HANDLE DIDIT RESULT
-      // ========================================================
+      _stopPolling();
+      _currentPosition = null;
 
-      await _handleDiditResult(
-        result,
+      _showError(
+        'The request took too long. Please try again.',
       );
-    } catch (e, stackTrace) {
+    } catch (e) {
+      if (_leavingPage || _loginHandled) return;
+
+      _stopPolling();
+      _currentPosition = null;
+
+      // Do not expose raw server exceptions or coordinates.
       debugPrint(
-        '==========================================',
+        '[SWIFTCARE FACE LOGIN] Unable to start verification.',
       );
 
-      debugPrint(
-        'FACE LOGIN START EXCEPTION',
+      _showError(
+        'Unable to complete secure sign in. Please try again.',
       );
-
-      debugPrint(
-        '$e',
-      );
-
-      debugPrint(
-        '$stackTrace',
-      );
-
-      debugPrint(
-        '==========================================',
-      );
-
-      _diditRunning = false;
-
-      if (!mounted || _leavingPage) {
-        return;
-      }
-
-      _pollTimer?.cancel();
-      _pollTimer = null;
-
-      _pollInProgress = false;
-
-      setState(() {
-        _isStarting = false;
-        _isChecking = false;
-
-        _errorMessage =
-            'Could not start face verification.\n\n'
-            '$e';
-      });
     }
   }
 
   // ============================================================
-  // HANDLE DIDIT RESULT
+  // DIDIT RESULT
   // ============================================================
 
-  Future<void> _handleDiditResult(
-    VerificationResult result,
-  ) async {
-    if (!mounted ||
-        _leavingPage ||
-        _loginHandled) {
+  Future<void> _handleDiditResult(dynamic result) async {
+    if (_leavingPage || _loginHandled) return;
+
+    if (result is VerificationCompleted) {
+      if (mounted) {
+        setState(() {
+          _diditRunning = false;
+          _isChecking = true;
+        });
+      }
+
+      // The backend decides whether verification succeeded.
       return;
     }
 
-    switch (result) {
-      // ========================================================
-      // COMPLETED
-      // ========================================================
+    if (result is VerificationCancelled) {
+      _stopPolling();
+      _currentPosition = null;
 
-      case VerificationCompleted(:final session):
-        debugPrint(
-          '==========================================',
-        );
-
-        debugPrint(
-          'DIDIT SDK COMPLETED',
-        );
-
-        debugPrint(
-          'Didit session ID: ${session.sessionId}',
-        );
-
-        debugPrint(
-          'Didit client status: '
-          '${session.status.name}',
-        );
-
-        debugPrint(
-          '==========================================',
-        );
-
-        if (session.status ==
-            VerificationStatus.declined) {
-          _pollTimer?.cancel();
-          _pollTimer = null;
-
-          if (!mounted || _leavingPage) {
-            return;
-          }
-
-          setState(() {
-            _isChecking = false;
-
-            _errorMessage =
-                'Didit could not verify your face. '
-                'Please try again.';
-          });
-
-          return;
-        }
-
-        if (!mounted ||
-            _leavingPage ||
-            _loginHandled) {
-          return;
-        }
-
-        setState(() {
-          _isChecking = true;
-          _errorMessage = null;
-        });
-
-        await _checkFaceLoginStatus();
-
-        return;
-
-      // ========================================================
-      // USER CANCELLED
-      // ========================================================
-
-      case VerificationCancelled(:final session):
-        debugPrint(
-          '==========================================',
-        );
-
-        debugPrint(
-          'DIDIT SDK CANCELLED',
-        );
-
-        if (session != null) {
-          debugPrint(
-            'Didit session ID: '
-            '${session.sessionId}',
-          );
-        }
-
-        debugPrint(
-          '==========================================',
-        );
-
-        _pollTimer?.cancel();
-        _pollTimer = null;
-
-        if (!mounted || _leavingPage) {
-          return;
-        }
-
-        setState(() {
-          _isChecking = false;
-
-          _errorMessage =
-              'Face verification was cancelled.';
-        });
-
-        return;
-
-      // ========================================================
-      // DIDIT FAILED
-      // ========================================================
-
-      case VerificationFailed(:final error):
-        debugPrint(
-          '==========================================',
-        );
-
-        debugPrint(
-          'DIDIT SDK FAILED',
-        );
-
-        debugPrint(
-          'Error type: ${error.type.name}',
-        );
-
-        debugPrint(
-          'Error message: ${error.message}',
-        );
-
-        debugPrint(
-          '==========================================',
-        );
-
-        _pollTimer?.cancel();
-        _pollTimer = null;
-
-        if (!mounted || _leavingPage) {
-          return;
-        }
-
-        setState(() {
-          _isChecking = false;
-
-          _errorMessage =
-              _getDiditErrorMessage(
-            error,
-          );
-        });
-
-        return;
+      _showError('Face verification was cancelled.');
+      return;
     }
-  }
 
-  // ============================================================
-  // DIDIT ERROR MESSAGE
-  // ============================================================
+    if (result is VerificationFailed) {
+      _stopPolling();
+      _currentPosition = null;
 
-  String _getDiditErrorMessage(
-    VerificationError error,
-  ) {
-    switch (error.type) {
-      case VerificationErrorType.sessionExpired:
-        return 'The face verification session has expired. '
-            'Please try again.';
+      _showError(
+        'Face verification could not be completed. '
+        'Please try again.',
+      );
+      return;
+    }
 
-      case VerificationErrorType.networkError:
-        return 'Didit could not connect to its verification '
-            'service. Please check your internet connection '
-            'and try again.';
-
-      case VerificationErrorType.cameraAccessDenied:
-        return 'Camera access was denied. '
-            'Please allow camera access for SwiftCare '
-            'and try again.';
-
-      case VerificationErrorType.notInitialized:
-        return 'Didit could not initialize correctly. '
-            'Please restart SwiftCare and try again.';
-
-      case VerificationErrorType.apiError:
-        return 'Didit encountered a verification service '
-            'error. Please try again.';
-
-      case VerificationErrorType.retryBlocked:
-        return 'Too many verification attempts have been made. '
-            'Please wait and try again later.';
-
-      case VerificationErrorType.unknown:
-        return error.message.isNotEmpty
-            ? error.message
-            : 'Didit could not complete face verification.';
+    if (mounted) {
+      setState(() {
+        _diditRunning = false;
+      });
     }
   }
 
@@ -568,14 +280,11 @@ class _FaceVerificationPageState
   // ============================================================
 
   void _startPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
+    _stopPolling();
 
-    _pollInProgress = false;
-
-    if (_leavingPage ||
-        _loginHandled ||
-        !_isChecking) {
+    if (_sessionId == null ||
+        _sessionId!.isEmpty ||
+        _leavingPage) {
       return;
     }
 
@@ -584,15 +293,36 @@ class _FaceVerificationPageState
     _pollTimer = Timer.periodic(
       const Duration(seconds: 3),
       (_) {
-        if (_leavingPage ||
-            _loginHandled ||
-            !_isChecking) {
-          _pollTimer?.cancel();
-          _pollTimer = null;
-          return;
+        if (!_leavingPage && !_loginHandled) {
+          _checkFaceLoginStatus();
         }
+      },
+    );
+  }
 
-        _checkFaceLoginStatus();
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  // ============================================================
+  // STATUS URI WITH COORDINATES
+  // ============================================================
+
+  Uri _buildFaceLoginStatusUri(
+    String sessionId,
+    Position position,
+  ) {
+    final baseUri = Uri.parse(
+      '$_apiBaseUrl/api/Auth/face-login/status/'
+      '${Uri.encodeComponent(sessionId)}',
+    );
+
+    return baseUri.replace(
+      queryParameters: {
+        'latitude': position.latitude.toString(),
+        'longitude': position.longitude.toString(),
+        'accuracy': position.accuracy.toString(),
       },
     );
   }
@@ -602,161 +332,110 @@ class _FaceVerificationPageState
   // ============================================================
 
   Future<void> _checkFaceLoginStatus() async {
+    if (_leavingPage ||
+        _loginHandled ||
+        _pollInProgress) {
+      return;
+    }
+
     final sessionId = _sessionId;
+    final position = _currentPosition;
 
     if (sessionId == null ||
         sessionId.isEmpty ||
-        !_isChecking ||
-        _isSuccess ||
-        _leavingPage ||
-        _loginHandled ||
-        _pollInProgress) {
+        position == null) {
       return;
     }
 
     _pollInProgress = true;
 
     try {
-      final uri = Uri.parse(
-        '$_apiBaseUrl/api/Auth/face-login/status/'
-        '${Uri.encodeComponent(sessionId)}',
+      // Matches:
+      //
+      // [HttpGet("face-login/status/{sessionId}")]
+      //
+      // [FromQuery] double? latitude
+      // [FromQuery] double? longitude
+      // [FromQuery] double? accuracy
+      //
+      final uri = _buildFaceLoginStatusUri(
+        sessionId,
+        position,
       );
 
       final response = await http.get(
         uri,
-        headers: {
+        headers: const {
           'Accept': 'application/json',
         },
-      );
+      ).timeout(const Duration(seconds: 15));
 
-      debugPrint(
-        'FACE LOGIN STATUS: '
-        '${response.statusCode}',
-      );
+      if (_leavingPage || _loginHandled) return;
 
-      if (!mounted ||
-          _leavingPage ||
-          _loginHandled) {
-        return;
-      }
-
-      Map<String, dynamic> data = {};
-
-      try {
-        final decoded = jsonDecode(
-          response.body,
-        );
-
-        if (decoded is Map<String, dynamic>) {
-          data = decoded;
-        }
-      } catch (e) {
-        debugPrint(
-          'Could not decode face login status response: $e',
-        );
-      }
+      final data = _decodeResponse(response);
 
       // ========================================================
-      // SUCCESS
+      // SUCCESSFUL AUTHENTICATION
       // ========================================================
 
-      if (response.statusCode == 200 &&
-          data['authenticated'] == true) {
-        final token =
-            data['token']?.toString();
+      if (response.statusCode == 200 && data != null) {
+        final authenticated =
+            data['authenticated'] == true;
 
-        if (token == null ||
-            token.isEmpty) {
-          _pollTimer?.cancel();
-          _pollTimer = null;
+        if (authenticated) {
+          final token = data['token']?.toString();
 
-          if (!mounted ||
-              _leavingPage ||
-              _loginHandled) {
+          if (token == null || token.isEmpty) {
             return;
           }
 
-          setState(() {
-            _isChecking = false;
+          _loginHandled = true;
+          _stopPolling();
 
-            _errorMessage =
-                'Face verification succeeded, '
-                'but SwiftCare did not return a login token.';
-          });
+          await _handleSuccessfulLogin(data);
+          return;
+        }
+
+        // Still processing.
+        if (data['completed'] != true) {
+          if (mounted) {
+            setState(() {
+              _isChecking = true;
+            });
+          }
 
           return;
         }
 
-        if (_loginHandled) {
-          return;
-        }
+        // The backend has finished but did not authenticate.
+        _stopPolling();
+        _currentPosition = null;
 
-        _loginHandled = true;
-
-        _pollTimer?.cancel();
-        _pollTimer = null;
-
-        debugPrint(
-          '==========================================',
-        );
-
-        debugPrint(
-          'FACE LOGIN AUTHENTICATED',
-        );
-
-        debugPrint(
-          'Navigation/login handling locked.',
-        );
-
-        debugPrint(
-          '==========================================',
-        );
-
-        await _handleSuccessfulLogin(
-          data,
+        _showError(
+          _serverMessage(
+            data,
+            'Face verification was not successful.',
+          ),
         );
 
         return;
       }
 
       // ========================================================
-      // STILL PROCESSING
+      // AUTHENTICATION FAILED
       // ========================================================
 
-      if (response.statusCode == 200 &&
-          data['completed'] == false) {
-        if (mounted &&
-            !_leavingPage &&
-            !_loginHandled) {
-          setState(() {
-            _isChecking = true;
-          });
-        }
+      if (response.statusCode == 400 ||
+          response.statusCode == 401 ||
+          response.statusCode == 403 ||
+          response.statusCode == 404) {
+        _stopPolling();
+        _currentPosition = null;
 
-        return;
-      }
-
-      // ========================================================
-      // VERIFICATION FAILED
-      // ========================================================
-
-      if (response.statusCode == 401) {
-        _pollTimer?.cancel();
-        _pollTimer = null;
-
-        if (!mounted ||
-            _leavingPage ||
-            _loginHandled) {
-          return;
-        }
-
-        setState(() {
-          _isChecking = false;
-
-          _errorMessage =
-              data['message']?.toString() ??
-              'Face verification was not successful.';
-        });
+        _showError(
+          'Face verification was not successful. '
+          'Please try again.',
+        );
 
         return;
       }
@@ -766,34 +445,60 @@ class _FaceVerificationPageState
       // ========================================================
 
       if (response.statusCode >= 500) {
-        _pollTimer?.cancel();
-        _pollTimer = null;
+        _stopPolling();
+        _currentPosition = null;
 
-        if (!mounted ||
-            _leavingPage ||
-            _loginHandled) {
-          return;
-        }
-
-        setState(() {
-          _isChecking = false;
-
-          _errorMessage =
-              data['message']?.toString() ??
-              'SwiftCare could not complete face verification.';
-        });
-
-        return;
+        _showError(
+          'The SwiftCare server encountered an error. '
+          'Please try again.',
+        );
       }
-    } catch (e) {
-      debugPrint(
-        'Face login status check failed: $e',
-      );
-
-      // Keep polling.
+    } on TimeoutException {
+      // Retry during the next polling cycle.
+    } catch (_) {
+      // Retry transient network errors.
     } finally {
       _pollInProgress = false;
     }
+  }
+
+  // ============================================================
+  // RESPONSE HELPERS
+  // ============================================================
+
+  Map<String, dynamic>? _decodeResponse(
+    http.Response response,
+  ) {
+    if (response.body.isEmpty) return null;
+
+    try {
+      final decoded = jsonDecode(response.body);
+
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
+  String _serverMessage(
+    Map<String, dynamic>? data,
+    String fallback,
+  ) {
+    if (data == null) return fallback;
+
+    final message =
+        data['message'] ?? data['error'] ?? data['detail'];
+
+    if (message is String &&
+        message.trim().isNotEmpty) {
+      return message.trim();
+    }
+
+    return fallback;
   }
 
   // ============================================================
@@ -803,95 +508,57 @@ class _FaceVerificationPageState
   Future<void> _handleSuccessfulLogin(
     Map<String, dynamic> data,
   ) async {
-    if (!mounted ||
-        _leavingPage ||
-        !_loginHandled) {
-      return;
+    if (_leavingPage) return;
+
+    _currentPosition = null;
+
+    if (mounted) {
+      setState(() {
+        _isStarting = false;
+        _isChecking = false;
+        _isSuccess = true;
+        _diditRunning = false;
+      });
     }
-
-    _pollTimer?.cancel();
-    _pollTimer = null;
-
-    _pollInProgress = false;
-
-    setState(() {
-      _isChecking = false;
-      _isSuccess = true;
-      _errorMessage = null;
-    });
-
-    debugPrint(
-      'Showing successful face-login screen.',
-    );
 
     await Future.delayed(
-      const Duration(
-        milliseconds: 900,
-      ),
+      const Duration(milliseconds: 900),
     );
 
-    if (!mounted ||
-        _leavingPage) {
-      return;
-    }
+    if (_leavingPage || !mounted) return;
 
-    _leavingPage = true;
-
-    _pollTimer?.cancel();
-    _pollTimer = null;
-
-    debugPrint(
-      'Returning successful face-login result.',
-    );
-
-    debugPrint(
-      'Navigator.pop() will execute exactly once.',
-    );
-
-    if (!mounted) {
-      return;
-    }
-
-    Navigator.of(context).pop(
-      data,
-    );
+    Navigator.of(context).pop(data);
   }
 
   // ============================================================
-  // RETRY
+  // RETRY / CLOSE / ERROR
   // ============================================================
 
   Future<void> _retry() async {
-    if (_isStarting ||
-        _diditRunning ||
-        _leavingPage ||
-        _loginHandled) {
-      return;
-    }
-
+    if (_leavingPage) return;
     await _startFaceLogin();
   }
 
-  // ============================================================
-  // SAFE POP
-  // ============================================================
-
   void _closePage() {
-    if (!mounted ||
-        _leavingPage ||
-        _diditRunning ||
-        _loginHandled) {
-      return;
-    }
+    if (_leavingPage) return;
 
     _leavingPage = true;
-
-    _pollTimer?.cancel();
-    _pollTimer = null;
-
-    _pollInProgress = false;
+    _stopPolling();
+    _currentPosition = null;
 
     Navigator.of(context).pop();
+  }
+
+  void _showError(String message) {
+    if (_leavingPage || !mounted) return;
+
+    setState(() {
+      _isStarting = false;
+      _isChecking = false;
+      _isSuccess = false;
+      _diditRunning = false;
+      _errorMessage = message;
+    });
   }
 
   // ============================================================
@@ -899,63 +566,15 @@ class _FaceVerificationPageState
   // ============================================================
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: paleGreen,
-
+      backgroundColor: _background,
       body: SafeArea(
-        child: Stack(
+        child: Column(
           children: [
-
-            // ==================================================
-            // BACKGROUND DECORATION
-            // ==================================================
-
-            Positioned(
-              top: -100,
-              right: -90,
-              child: Container(
-                width: 230,
-                height: 230,
-
-                decoration: BoxDecoration(
-                  color:
-                      limeGreen.withOpacity(0.15),
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-
-            Positioned(
-              bottom: -120,
-              left: -100,
-              child: Container(
-                width: 250,
-                height: 250,
-
-                decoration: BoxDecoration(
-                  color:
-                      lightGreen.withOpacity(0.55),
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-
-            // ==================================================
-            // PAGE
-            // ==================================================
-
-            Column(
-              children: [
-
-                _buildHeader(),
-
-                Expanded(
-                  child: _buildContent(),
-                ),
-              ],
+            _buildHeader(),
+            Expanded(
+              child: _buildContent(),
             ),
           ],
         ),
@@ -970,146 +589,73 @@ class _FaceVerificationPageState
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
-
       padding: const EdgeInsets.symmetric(
-        horizontal: 18,
-        vertical: 14,
+        horizontal: 20,
+        vertical: 18,
       ),
-
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.95),
-
-        border: const Border(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
           bottom: BorderSide(
-            color: borderGreen,
+            color: _border,
             width: 1,
           ),
         ),
-
-        boxShadow: [
-          BoxShadow(
-            color:
-                forestGreen.withOpacity(0.06),
-            blurRadius: 18,
-            offset: const Offset(0, 5),
-          ),
-        ],
       ),
-
       child: Row(
         children: [
-
-          // ==================================================
-          // BACK BUTTON
-          // ==================================================
-
-          Container(
-            width: 42,
-            height: 42,
-
-            decoration: BoxDecoration(
-              color: lightGreen,
-              borderRadius:
-                  BorderRadius.circular(13),
-            ),
-
-            child: IconButton(
-              onPressed: _closePage,
-
-              icon: const Icon(
-                Icons.arrow_back_rounded,
-                color: forestGreen,
-                size: 21,
+          Material(
+            color: _lightGreen,
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              onTap: _closePage,
+              borderRadius: BorderRadius.circular(14),
+              child: const SizedBox(
+                width: 46,
+                height: 46,
+                child: Icon(
+                  Icons.arrow_back_rounded,
+                  color: _darkGreen,
+                ),
               ),
             ),
           ),
-
           const SizedBox(width: 14),
-
-          // ==================================================
-          // LOGO
-          // ==================================================
-
-          Container(
-            width: 42,
-            height: 42,
-
-            decoration: BoxDecoration(
-              color: limeGreen,
-              borderRadius:
-                  BorderRadius.circular(13),
-            ),
-
-            child: const Icon(
-              Icons.monitor_heart_rounded,
-              color: logoGreen,
-              size: 25,
-            ),
-          ),
-
-          const SizedBox(width: 12),
-
-          // ==================================================
-          // TITLE
-          // ==================================================
-
           const Expanded(
             child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
-
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-
-                Text(
-                  'SwiftCare',
-
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: mediumGreen,
-                  ),
-                ),
-
-                SizedBox(height: 2),
-
                 Text(
                   'Face Verification',
-
                   style: TextStyle(
-                    fontSize: 19,
-                    fontWeight: FontWeight.bold,
-                    color: forestGreen,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: _deepGreen,
+                  ),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  'Secure SwiftCare sign in',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.black54,
                   ),
                 ),
               ],
             ),
           ),
-
-          // ==================================================
-          // SECURITY ICON
-          // ==================================================
-
-          if (_isChecking)
-            Container(
-              width: 38,
-              height: 38,
-
-              decoration: BoxDecoration(
-                color:
-                    lightGreen.withOpacity(0.65),
-                shape: BoxShape.circle,
-              ),
-
-              child: const Padding(
-                padding: EdgeInsets.all(9),
-
-                child:
-                    CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  color: mediumGreen,
-                ),
-              ),
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: _lightGreen,
+              borderRadius: BorderRadius.circular(14),
             ),
+            child: const Icon(
+              Icons.verified_user_rounded,
+              color: _darkGreen,
+            ),
+          ),
         ],
       ),
     );
@@ -1120,542 +666,118 @@ class _FaceVerificationPageState
   // ============================================================
 
   Widget _buildContent() {
-    if (_isStarting) {
-      return _buildLoading();
-    }
-
     if (_errorMessage != null) {
-      return _buildError();
+      return _buildErrorState();
     }
 
     if (_isSuccess) {
-      return _buildSuccess();
+      return _buildSuccessState();
     }
 
-    if (_diditRunning) {
-      return _buildDiditLoading();
-    }
-
-    if (_isChecking) {
-      return _buildBackendChecking();
-    }
-
-    return _buildLoading();
+    return _buildVerificationState();
   }
 
   // ============================================================
-  // COMMON PAGE WRAPPER
+  // VERIFICATION STATE
   // ============================================================
 
-  Widget _pageWrapper({
-    required Widget child,
-  }) {
+  Widget _buildVerificationState() {
     return Center(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(
-          horizontal: 24,
-          vertical: 28,
-        ),
-        child: child,
-      ),
-    );
-  }
-
-  // ============================================================
-  // STATUS CARD
-  // ============================================================
-
-  Widget _statusCard({
-    required IconData icon,
-    required String title,
-    required String description,
-    required Color iconBackground,
-    required Color iconColor,
-    Widget? bottom,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(28),
-
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.95),
-
-        borderRadius:
-            BorderRadius.circular(30),
-
-        border: Border.all(
-          color: borderGreen,
-          width: 1.2,
-        ),
-
-        boxShadow: [
-          BoxShadow(
-            color:
-                forestGreen.withOpacity(0.08),
-            blurRadius: 28,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-
-      child: Column(
-        children: [
-
-          // ==================================================
-          // ICON
-          // ==================================================
-
-          Container(
-            width: 92,
-            height: 92,
-
-            decoration: BoxDecoration(
-              color: iconBackground,
-              shape: BoxShape.circle,
-
-              border: Border.all(
-                color:
-                    limeGreen.withOpacity(0.35),
-                width: 2,
-              ),
-
-              boxShadow: [
-                BoxShadow(
-                  color:
-                      limeGreen.withOpacity(0.12),
-                  blurRadius: 22,
-                  spreadRadius: 2,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 120,
+              height: 120,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _lightGreen,
+                border: Border.all(
+                  color: _lime,
+                  width: 2,
                 ),
-              ],
+              ),
+              child: Icon(
+                _diditRunning
+                    ? Icons.face_retouching_natural_rounded
+                    : Icons.face_rounded,
+                size: 62,
+                color: _darkGreen,
+              ),
             ),
-
-            child: Icon(
-              icon,
-              size: 48,
-              color: iconColor,
-            ),
-          ),
-
-          const SizedBox(height: 25),
-
-          // ==================================================
-          // TITLE
-          // ==================================================
-
-          Text(
-            title,
-            textAlign: TextAlign.center,
-
-            style: const TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-              color: forestGreen,
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // ==================================================
-          // DESCRIPTION
-          // ==================================================
-
-          Text(
-            description,
-            textAlign: TextAlign.center,
-
-            style: const TextStyle(
-              fontSize: 14,
-              height: 1.6,
-              color: textGreen,
-            ),
-          ),
-
-          if (bottom != null) ...[
             const SizedBox(height: 28),
-            bottom,
-          ],
-        ],
-      ),
-    );
-  }
-
-  // ============================================================
-  // STEP INDICATOR
-  // ============================================================
-
-  Widget _buildSteps({
-    required int activeStep,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(
-        horizontal: 18,
-        vertical: 16,
-      ),
-
-      decoration: BoxDecoration(
-        color:
-            lightGreen.withOpacity(0.42),
-
-        borderRadius:
-            BorderRadius.circular(20),
-
-        border: Border.all(
-          color:
-              limeGreen.withOpacity(0.20),
-        ),
-      ),
-
-      child: Row(
-        children: [
-
-          _buildStep(
-            number: 1,
-            label: 'Scan',
-            active: activeStep >= 1,
-            completed: activeStep > 1,
-          ),
-
-          _buildStepLine(
-            active: activeStep > 1,
-          ),
-
-          _buildStep(
-            number: 2,
-            label: 'Verify',
-            active: activeStep >= 2,
-            completed: activeStep > 2,
-          ),
-
-          _buildStepLine(
-            active: activeStep > 2,
-          ),
-
-          _buildStep(
-            number: 3,
-            label: 'Sign In',
-            active: activeStep >= 3,
-            completed: activeStep > 3,
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ============================================================
-  // STEP
-  // ============================================================
-
-  Widget _buildStep({
-    required int number,
-    required String label,
-    required bool active,
-    required bool completed,
-  }) {
-    return Column(
-      children: [
-
-        Container(
-          width: 32,
-          height: 32,
-
-          decoration: BoxDecoration(
-            color: completed
-                ? limeGreen
-                : active
-                    ? forestGreen
-                    : Colors.white,
-
-            shape: BoxShape.circle,
-
-            border: Border.all(
-              color: active
-                  ? forestGreen
-                  : borderGreen,
-              width: 1.5,
-            ),
-          ),
-
-          child: Center(
-            child: completed
-                ? const Icon(
-                    Icons.check_rounded,
-                    size: 18,
-                    color: logoGreen,
-                  )
-                : Text(
-                    '$number',
-
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight:
-                          FontWeight.bold,
-                      color: active
-                          ? Colors.white
-                          : textGreen,
-                    ),
-                  ),
-          ),
-        ),
-
-        const SizedBox(height: 6),
-
-        Text(
-          label,
-
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight:
-                active
-                    ? FontWeight.w700
-                    : FontWeight.w500,
-            color: active
-                ? forestGreen
-                : textGreen,
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ============================================================
-  // STEP CONNECTOR
-  // ============================================================
-
-  Widget _buildStepLine({
-    required bool active,
-  }) {
-    return Expanded(
-      child: Container(
-        height: 2,
-        margin:
-            const EdgeInsets.only(
-          bottom: 19,
-          left: 6,
-          right: 6,
-        ),
-
-        decoration: BoxDecoration(
-          color: active
-              ? limeGreen
-              : borderGreen,
-
-          borderRadius:
-              BorderRadius.circular(10),
-        ),
-      ),
-    );
-  }
-
-  // ============================================================
-  // LOADING
-  // ============================================================
-
-  Widget _buildLoading() {
-    return _pageWrapper(
-      child: _statusCard(
-        icon: Icons
-            .fingerprint_rounded,
-        title:
-            'Preparing Verification',
-        description:
-            'We are securely preparing your face verification. '
-            'Please wait a moment.',
-
-        iconBackground: lightGreen,
-        iconColor: forestGreen,
-
-        bottom: Column(
-          children: [
-
-            _buildSteps(
-              activeStep: 1,
-            ),
-
-            const SizedBox(height: 24),
-
-            const SizedBox(
-              width: 32,
-              height: 32,
-
-              child:
-                  CircularProgressIndicator(
-                strokeWidth: 3,
-                color: mediumGreen,
+            Text(
+              _isStarting
+                  ? 'Preparing Verification'
+                  : _diditRunning
+                      ? 'Verify Your Identity'
+                      : 'Checking Verification',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                color: _deepGreen,
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ============================================================
-  // DIDIT LOADING
-  // ============================================================
-
-  Widget _buildDiditLoading() {
-    return _pageWrapper(
-      child: _statusCard(
-        icon: Icons
-            .face_retouching_natural,
-        title:
-            'Scan Your Face',
-        description:
-            'Follow the secure Didit verification screen '
-            'and position your face inside the camera frame.',
-
-        iconBackground: limeGreen,
-        iconColor: logoGreen,
-
-        bottom: Column(
-          children: [
-
-            _buildSteps(
-              activeStep: 1,
+            const SizedBox(height: 12),
+            Text(
+              _isStarting
+                  ? 'Preparing your secure face verification.'
+                  : _diditRunning
+                      ? 'Follow the instructions on screen '
+                          'to complete face verification.'
+                      : 'SwiftCare is securely confirming '
+                          'your identity.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                height: 1.5,
+                color: Colors.black54,
+              ),
             ),
-
-            const SizedBox(height: 24),
-
-            Container(
-              width: double.infinity,
-              padding:
-                  const EdgeInsets.all(15),
-
-              decoration: BoxDecoration(
-                color:
-                    paleGreen,
-
-                borderRadius:
-                    BorderRadius.circular(16),
-
-                border: Border.all(
-                  color: borderGreen,
+            const SizedBox(height: 28),
+            if (_isStarting || _isChecking)
+              const SizedBox(
+                width: 34,
+                height: 34,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(_green),
                 ),
               ),
-
-              child: const Row(
-                children: [
-
-                  Icon(
-                    Icons
-                        .camera_alt_outlined,
-                    color: mediumGreen,
-                    size: 20,
-                  ),
-
-                  SizedBox(width: 10),
-
-                  Expanded(
-                    child: Text(
-                      'Camera verification is running securely.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: textGreen,
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
             const SizedBox(height: 22),
-
-            const SizedBox(
-              width: 30,
-              height: 30,
-
-              child:
-                  CircularProgressIndicator(
-                strokeWidth: 3,
-                color: mediumGreen,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ============================================================
-  // BACKEND CHECKING
-  // ============================================================
-
-  Widget _buildBackendChecking() {
-    return _pageWrapper(
-      child: _statusCard(
-        icon: Icons.verified_user_rounded,
-        title:
-            'Checking Your Identity',
-        description:
-            'Your face has been submitted successfully. '
-            'SwiftCare is securely confirming your identity.',
-
-        iconBackground: lightGreen,
-        iconColor: forestGreen,
-
-        bottom: Column(
-          children: [
-
-            _buildSteps(
-              activeStep: 2,
-            ),
-
-            const SizedBox(height: 24),
-
             Container(
-              width: double.infinity,
-              padding:
-                  const EdgeInsets.all(15),
-
-              decoration: BoxDecoration(
-                color:
-                    paleGreen,
-
-                borderRadius:
-                    BorderRadius.circular(16),
-
-                border: Border.all(
-                  color: borderGreen,
-                ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 14,
               ),
-
+              decoration: BoxDecoration(
+                color: _lightGreen.withOpacity(0.55),
+                borderRadius: BorderRadius.circular(16),
+              ),
               child: const Row(
                 children: [
-
                   Icon(
                     Icons.lock_outline_rounded,
-                    color: mediumGreen,
                     size: 20,
+                    color: _darkGreen,
                   ),
-
                   SizedBox(width: 10),
-
                   Expanded(
                     child: Text(
-                      'Verification is being confirmed by SwiftCare.',
+                      'Your face verification is securely '
+                      'processed through SwiftCare.',
                       style: TextStyle(
-                        fontSize: 13,
-                        color: textGreen,
+                        fontSize: 12,
                         height: 1.4,
+                        color: _darkGreen,
                       ),
                     ),
                   ),
                 ],
-              ),
-            ),
-
-            const SizedBox(height: 24),
-
-            const SizedBox(
-              width: 30,
-              height: 30,
-
-              child:
-                  CircularProgressIndicator(
-                strokeWidth: 3,
-                color: mediumGreen,
               ),
             ),
           ],
@@ -1665,121 +787,94 @@ class _FaceVerificationPageState
   }
 
   // ============================================================
-  // ERROR
+  // ERROR STATE
   // ============================================================
 
-  Widget _buildError() {
-    return _pageWrapper(
-      child: _statusCard(
-        icon: Icons
-            .error_outline_rounded,
-        title:
-            'Verification Unsuccessful',
-        description:
-            _errorMessage ??
-            'Face verification could not be completed. '
-            'Please try again.',
-
-        iconBackground:
-            const Color(0xFFFFF1F1),
-
-        iconColor:
-            const Color(0xFFC62828),
-
-        bottom: Column(
+  Widget _buildErrorState() {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-
-            // ==================================================
-            // RETRY
-            // ==================================================
-
+            Container(
+              width: 110,
+              height: 110,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.red.shade50,
+                border: Border.all(
+                  color: Colors.red.shade100,
+                ),
+              ),
+              child: Icon(
+                Icons.error_outline_rounded,
+                size: 58,
+                color: Colors.red.shade700,
+              ),
+            ),
+            const SizedBox(height: 28),
+            const Text(
+              'Verification Failed',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 25,
+                fontWeight: FontWeight.w800,
+                color: _deepGreen,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _errorMessage!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                height: 1.5,
+                color: Colors.black54,
+              ),
+            ),
+            const SizedBox(height: 30),
             SizedBox(
               width: double.infinity,
               height: 54,
-
               child: ElevatedButton.icon(
                 onPressed: _retry,
-
-                icon: const Icon(
-                  Icons.refresh_rounded,
-                ),
-
+                icon: const Icon(Icons.refresh_rounded),
                 label: const Text(
                   'Try Again',
-                ),
-
-                style:
-                    ElevatedButton.styleFrom(
-                  backgroundColor:
-                      forestGreen,
-
-                  foregroundColor:
-                      Colors.white,
-
-                  elevation: 0,
-
-                  shape:
-                      RoundedRectangleBorder(
-                    borderRadius:
-                        BorderRadius.circular(
-                      16,
-                    ),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                   ),
-
-                  textStyle:
-                      const TextStyle(
-                    fontSize: 15,
-                    fontWeight:
-                        FontWeight.w600,
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _darkGreen,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
                   ),
                 ),
               ),
             ),
-
             const SizedBox(height: 12),
-
-            // ==================================================
-            // BACK
-            // ==================================================
-
             SizedBox(
               width: double.infinity,
-              height: 54,
-
-              child: OutlinedButton.icon(
+              height: 52,
+              child: OutlinedButton(
                 onPressed: _closePage,
-
-                icon: const Icon(
-                  Icons.arrow_back_rounded,
-                ),
-
-                label: const Text(
-                  'Back to Login',
-                ),
-
-                style:
-                    OutlinedButton.styleFrom(
-                  foregroundColor:
-                      forestGreen,
-
-                  side: const BorderSide(
-                    color: borderGreen,
-                    width: 1.5,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _darkGreen,
+                  side: const BorderSide(color: _border),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
                   ),
-
-                  shape:
-                      RoundedRectangleBorder(
-                    borderRadius:
-                        BorderRadius.circular(
-                      16,
-                    ),
-                  ),
-
-                  textStyle:
-                      const TextStyle(
+                ),
+                child: const Text(
+                  'Go Back',
+                  style: TextStyle(
                     fontSize: 15,
-                    fontWeight:
-                        FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
@@ -1791,91 +886,60 @@ class _FaceVerificationPageState
   }
 
   // ============================================================
-  // SUCCESS
+  // SUCCESS STATE
   // ============================================================
 
-  Widget _buildSuccess() {
-    return _pageWrapper(
-      child: _statusCard(
-        icon: Icons.verified_rounded,
-        title:
-            'Face Verified Successfully',
-        description:
-            'Your identity has been confirmed. '
-            'Signing you in to SwiftCare now.',
-
-        iconBackground: limeGreen,
-        iconColor: logoGreen,
-
-        bottom: Column(
+  Widget _buildSuccessState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-
-            _buildSteps(
-              activeStep: 3,
-            ),
-
-            const SizedBox(height: 24),
-
             Container(
-              width: double.infinity,
-              padding:
-                  const EdgeInsets.all(15),
-
+              width: 120,
+              height: 120,
               decoration: BoxDecoration(
-                color:
-                    lightGreen.withOpacity(
-                  0.55,
-                ),
-
-                borderRadius:
-                    BorderRadius.circular(16),
-
+                shape: BoxShape.circle,
+                color: _lightGreen,
                 border: Border.all(
-                  color:
-                      limeGreen.withOpacity(
-                    0.30,
-                  ),
+                  color: _lime,
+                  width: 2,
                 ),
               ),
-
-              child: const Row(
-                children: [
-
-                  Icon(
-                    Icons
-                        .check_circle_outline_rounded,
-                    color: mediumGreen,
-                    size: 21,
-                  ),
-
-                  SizedBox(width: 10),
-
-                  Expanded(
-                    child: Text(
-                      'Authentication successful. Welcome to SwiftCare.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: forestGreen,
-                        fontWeight:
-                            FontWeight.w500,
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                ],
+              child: const Icon(
+                Icons.check_circle_rounded,
+                size: 68,
+                color: _green,
               ),
             ),
-
-            const SizedBox(height: 24),
-
-            const SizedBox(
-              width: 28,
-              height: 28,
-
-              child:
-                  CircularProgressIndicator(
-                strokeWidth: 3,
-                color: mediumGreen,
+            const SizedBox(height: 28),
+            const Text(
+              'Welcome Back',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w800,
+                color: _deepGreen,
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Your identity has been verified successfully.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 15,
+                height: 1.5,
+                color: Colors.black54,
+              ),
+            ),
+            const SizedBox(height: 26),
+            const Text(
+              'Signing you in securely...',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.black45,
               ),
             ),
           ],
@@ -1883,4 +947,4 @@ class _FaceVerificationPageState
       ),
     );
   }
-} 
+}
