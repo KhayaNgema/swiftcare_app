@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 
@@ -21,7 +20,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   // ============================================================
 
   static const String _apiBaseUrl =
-      'https://flop-enjoyment-unexposed.ngrok-free.dev';
+      'https://swiftcareapi20261002021942-bxfgbwbsf4agendr.centralindia-01.azurewebsites.net';
 
   // ============================================================
   // COLORS
@@ -39,7 +38,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   // STATE
   // ============================================================
 
-  bool _isStarting = true;
+  bool _isStarting = false;
   bool _isChecking = false;
   bool _isSuccess = false;
   bool _diditRunning = false;
@@ -47,6 +46,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   bool _leavingPage = false;
   bool _loginHandled = false;
   bool _pollInProgress = false;
+  bool _requestingLocation = false;
 
   String? _errorMessage;
   String? _sessionId;
@@ -56,20 +56,36 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   Timer? _pollTimer;
 
   // ============================================================
+  // POLLING CONFIGURATION
+  // ============================================================
+
+  static const Duration _pollInterval =
+      Duration(seconds: 3);
+
+  static const Duration _requestTimeout =
+      Duration(seconds: 20);
+
+  // ============================================================
   // INIT / DISPOSE
   // ============================================================
 
   @override
   void initState() {
     super.initState();
-    _startFaceLogin();
+
+    // Request Android's real location permission immediately when
+    // this page opens. There is NO custom "Allow Location" page.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_leavingPage) {
+        _prepareLocation();
+      }
+    });
   }
 
   @override
   void dispose() {
     _leavingPage = true;
     _stopPolling();
-    _currentPosition = null;
     super.dispose();
   }
 
@@ -77,30 +93,249 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   // LOCATION
   // ============================================================
 
-  Future<Position> _getCurrentLocation() async {
-    final serviceEnabled =
-        await Geolocator.isLocationServiceEnabled();
-
-    if (!serviceEnabled) {
-      throw StateError('Location services are disabled.');
+  Future<void> _prepareLocation() async {
+    if (_leavingPage ||
+        !mounted ||
+        _requestingLocation) {
+      return;
     }
 
-    var permission = await Geolocator.checkPermission();
+    _requestingLocation = true;
 
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
+    try {
+      if (mounted) {
+        setState(() {
+          _isStarting = false;
+          _isChecking = false;
+          _isSuccess = false;
+          _diditRunning = false;
+          _errorMessage = null;
+        });
+      }
+
+      // ----------------------------------------------------------
+      // 1. CHECK AND REQUEST THE REAL ANDROID PERMISSION FIRST.
+      //
+      // This triggers Android's native permission dialog.
+      // There is no custom permission page in SwiftCare.
+      // ----------------------------------------------------------
+
+      LocationPermission permission =
+          await Geolocator.checkPermission();
+
+      if (_leavingPage || !mounted) {
+        return;
+      }
+
+      if (permission == LocationPermission.denied) {
+        debugPrint(
+          '[LOCATION] Permission denied. Requesting Android permission...',
+        );
+
+        permission = await Geolocator.requestPermission();
+
+        if (_leavingPage || !mounted) {
+          return;
+        }
+
+        debugPrint(
+          '[LOCATION] Permission result: $permission',
+        );
+      }
+
+      // ----------------------------------------------------------
+      // 2. USER DENIED THE ANDROID PERMISSION.
+      // ----------------------------------------------------------
+
+      if (permission == LocationPermission.denied) {
+        if (mounted) {
+          setState(() {
+            _errorMessage =
+                'Location permission was denied. '
+                'SwiftCare needs location permission to securely '
+                'complete sign in. Please try again and tap Allow '
+                'when Android asks for permission.';
+          });
+        }
+
+        return;
+      }
+
+      // ----------------------------------------------------------
+      // 3. USER PERMANENTLY DENIED THE ANDROID PERMISSION.
+      //
+      // Open the real Android app settings. There is still no
+      // custom location permission page.
+      // ----------------------------------------------------------
+
+      if (permission == LocationPermission.deniedForever) {
+        debugPrint(
+          '[LOCATION] Permission permanently denied. '
+          'Opening Android app settings...',
+        );
+
+        try {
+          await Geolocator.openAppSettings();
+        } catch (e) {
+          debugPrint(
+            '[LOCATION] Could not open app settings: $e',
+          );
+        }
+
+        if (_leavingPage || !mounted) {
+          return;
+        }
+
+        setState(() {
+          _errorMessage =
+              'Location permission is blocked for SwiftCare. '
+              'Open SwiftCare settings and allow Location, '
+              'then tap Try Again.';
+        });
+
+        return;
+      }
+
+      // ----------------------------------------------------------
+      // 4. CHECK DEVICE LOCATION SERVICES AFTER PERMISSION.
+      // ----------------------------------------------------------
+
+      final serviceEnabled =
+          await Geolocator.isLocationServiceEnabled();
+
+      if (_leavingPage || !mounted) {
+        return;
+      }
+
+      if (!serviceEnabled) {
+        debugPrint(
+          '[LOCATION] Location services are disabled. '
+          'Opening device location settings...',
+        );
+
+        try {
+          await Geolocator.openLocationSettings();
+        } catch (e) {
+          debugPrint(
+            '[LOCATION] Could not open location settings: $e',
+          );
+        }
+
+        if (_leavingPage || !mounted) {
+          return;
+        }
+
+        setState(() {
+          _errorMessage =
+              'Location services are turned off. '
+              'Please enable Location on your device and tap '
+              'Try Again.';
+        });
+
+        return;
+      }
+
+      // ----------------------------------------------------------
+      // 5. GET CURRENT LOCATION.
+      // ----------------------------------------------------------
+
+      if (mounted) {
+        setState(() {
+          _isStarting = true;
+          _errorMessage = null;
+        });
+      }
+
+      debugPrint(
+        '[LOCATION] Permission granted. Getting current location...',
+      );
+
+      final position =
+          await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      ).timeout(
+        const Duration(seconds: 20),
+      );
+
+      if (_leavingPage || !mounted) {
+        return;
+      }
+
+      _currentPosition = position;
+
+      debugPrint(
+        '[LOCATION] Position acquired. '
+        'Latitude=${position.latitude}, '
+        'Longitude=${position.longitude}, '
+        'Accuracy=${position.accuracy}',
+      );
+
+      // ----------------------------------------------------------
+      // 6. LOCATION IS READY — START FACE LOGIN.
+      // ----------------------------------------------------------
+
+      await _startFaceLogin();
+    } on TimeoutException {
+      if (_leavingPage || !mounted) {
+        return;
+      }
+
+      setState(() {
+        _isStarting = false;
+        _errorMessage =
+            'We could not get your location in time. '
+            'Please make sure Location is enabled and try again.';
+      });
+    } on LocationServiceDisabledException {
+      if (_leavingPage || !mounted) {
+        return;
+      }
+
+      setState(() {
+        _isStarting = false;
+        _errorMessage =
+            'Location services are turned off. '
+            'Please enable Location and try again.';
+      });
+    } on PermissionDeniedException {
+      if (_leavingPage || !mounted) {
+        return;
+      }
+
+      setState(() {
+        _isStarting = false;
+        _errorMessage =
+            'SwiftCare needs location permission to securely '
+            'complete sign in. Please allow Location and try again.';
+      });
+    } catch (e, stackTrace) {
+      debugPrint(
+        '========================================',
+      );
+      debugPrint('[LOCATION] ERROR: $e');
+      debugPrint(
+        '[LOCATION] STACK TRACE:\n$stackTrace',
+      );
+      debugPrint(
+        '========================================',
+      );
+
+      if (_leavingPage || !mounted) {
+        return;
+      }
+
+      setState(() {
+        _isStarting = false;
+        _errorMessage =
+            'Unable to get your location. '
+            'Please check your Location settings and try again.';
+      });
+    } finally {
+      _requestingLocation = false;
     }
-
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      throw StateError('Location permission was not granted.');
-    }
-
-    return Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-      ),
-    ).timeout(const Duration(seconds: 20));
   }
 
   // ============================================================
@@ -108,14 +343,20 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   // ============================================================
 
   Future<void> _startFaceLogin() async {
-    if (_leavingPage) return;
+    if (_leavingPage || !mounted) {
+      return;
+    }
+
+    if (_currentPosition == null) {
+      await _prepareLocation();
+      return;
+    }
 
     _stopPolling();
 
     _loginHandled = false;
     _pollInProgress = false;
     _sessionId = null;
-    _currentPosition = null;
 
     if (mounted) {
       setState(() {
@@ -128,56 +369,130 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
     }
 
     try {
-      // Capture once for this login attempt.
-      final position = await _getCurrentLocation();
+      // ========================================================
+      // CREATE BACKEND FACE LOGIN SESSION
+      // ========================================================
 
-      if (_leavingPage) return;
+      final createUri = Uri.parse(
+        '$_apiBaseUrl/api/Auth/face-login',
+      );
 
-      _currentPosition = position;
+      debugPrint(
+        '========================================',
+      );
+      debugPrint(
+        '[FACE LOGIN] Creating face-login session',
+      );
+      debugPrint(
+        '[FACE LOGIN] URL: $createUri',
+      );
+      debugPrint(
+        '========================================',
+      );
 
-      // Create the Didit session.
-      // Coordinates are NOT sent to this POST action.
-      final response = await http.post(
-        Uri.parse('$_apiBaseUrl/api/Auth/face-login'),
-        headers: const {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(<String, dynamic>{}),
-      ).timeout(const Duration(seconds: 30));
+      final response = await http
+          .post(
+            createUri,
+            headers: const {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode(
+              <String, dynamic>{},
+            ),
+          )
+          .timeout(
+            const Duration(seconds: 30),
+          );
 
-      if (_leavingPage) return;
+      if (_leavingPage || !mounted) {
+        return;
+      }
+
+      debugPrint(
+        '[FACE LOGIN] Create session HTTP '
+        '${response.statusCode}',
+      );
+
+      debugPrint(
+        '[FACE LOGIN] Response body: '
+        '${response.body}',
+      );
 
       final data = _decodeResponse(response);
 
+      // ========================================================
+      // BACKEND ERROR
+      // ========================================================
+
       if (response.statusCode < 200 ||
           response.statusCode >= 300) {
-        throw StateError(
-          _serverMessage(
-            data,
-            'Unable to start face verification.',
-          ),
+        final message = _serverMessage(
+          data,
+          'SwiftCare could not create a face verification session.',
+        );
+
+        throw FaceLoginException(
+          stage: 'CREATE_SESSION',
+          message: message,
+          statusCode: response.statusCode,
         );
       }
+
+      // ========================================================
+      // INVALID RESPONSE
+      // ========================================================
 
       if (data == null) {
-        throw StateError(
-          'The server returned an invalid response.',
+        throw FaceLoginException(
+          stage: 'CREATE_SESSION',
+          message:
+              'SwiftCare received an invalid response from the server.',
+          statusCode: response.statusCode,
         );
       }
 
-      final sessionId = data['sessionId']?.toString();
-      final sessionToken = data['sessionToken']?.toString();
+      final sessionId =
+          data['sessionId']?.toString();
 
-      if (sessionId == null || sessionId.isEmpty) {
-        throw StateError(
-          'The server did not return a verification session.',
+      final sessionToken =
+          data['sessionToken']?.toString();
+
+      debugPrint(
+        '[FACE LOGIN] Session ID received: '
+        '${sessionId != null && sessionId.isNotEmpty}',
+      );
+
+      debugPrint(
+        '[FACE LOGIN] Session token received: '
+        '${sessionToken != null && sessionToken.isNotEmpty}',
+      );
+
+      // ========================================================
+      // VALIDATE SESSION ID
+      // ========================================================
+
+      if (sessionId == null ||
+          sessionId.trim().isEmpty) {
+        throw FaceLoginException(
+          stage: 'CREATE_SESSION',
+          message:
+              'The SwiftCare server did not return a verification session.',
+          statusCode: response.statusCode,
         );
       }
 
-      if (sessionToken == null || sessionToken.isEmpty) {
-        throw StateError(
-          'The server did not return a verification token.',
+      // ========================================================
+      // VALIDATE SESSION TOKEN
+      // ========================================================
+
+      if (sessionToken == null ||
+          sessionToken.trim().isEmpty) {
+        throw FaceLoginException(
+          stage: 'CREATE_SESSION',
+          message:
+              'The SwiftCare server did not return a verification token.',
+          statusCode: response.statusCode,
         );
       }
 
@@ -191,42 +506,178 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         });
       }
 
-      // Polling now sends the coordinates as query parameters.
-      _startPolling();
+      // ========================================================
+      // OPEN DIDIT FIRST
+      //
+      // We deliberately open Didit before starting the polling
+      // timer. This avoids an early status request killing the
+      // session before the native SDK has started.
+      // ========================================================
 
-      final result = await DiditSdk.startVerification(
-        sessionToken,
-        config: const DiditConfig(
-          loggingEnabled: false,
-        ),
+      debugPrint(
+        '[FACE LOGIN] Starting Didit SDK...',
       );
 
-      if (_leavingPage || _loginHandled) return;
+      dynamic result;
+
+      try {
+        result =
+            await DiditSdk.startVerification(
+          sessionToken,
+          config: const DiditConfig(
+            // IMPORTANT:
+            // Keep enabled while diagnosing release APK.
+            loggingEnabled: true,
+          ),
+        );
+
+        debugPrint(
+          '[FACE LOGIN] Didit SDK returned: '
+          '${result.runtimeType}',
+        );
+      } catch (e, stackTrace) {
+        debugPrint(
+          '========================================',
+        );
+        debugPrint(
+          '[DIDIT] SDK EXCEPTION',
+        );
+        debugPrint(
+          '[DIDIT] TYPE: ${e.runtimeType}',
+        );
+        debugPrint(
+          '[DIDIT] ERROR: $e',
+        );
+        debugPrint(
+          '[DIDIT] STACK TRACE:\n$stackTrace',
+        );
+        debugPrint(
+          '========================================',
+        );
+
+        _stopPolling();
+
+        throw FaceLoginException(
+          stage: 'DIDIT_SDK',
+          message:
+              'The secure identity verification service could not be opened.',
+          originalError: e,
+        );
+      }
+
+      if (_leavingPage || _loginHandled) {
+        return;
+      }
+
+      // ========================================================
+      // START POLLING AFTER DIDIT RETURNS
+      //
+      // We also start it immediately if Didit returned completed,
+      // because the backend may still need a few seconds.
+      // ========================================================
+
+      if (_sessionId != null &&
+          _sessionId!.isNotEmpty) {
+        _startPolling();
+      }
 
       await _handleDiditResult(result);
     } on TimeoutException {
-      if (_leavingPage || _loginHandled) return;
+      if (_leavingPage || _loginHandled) {
+        return;
+      }
 
       _stopPolling();
-      _currentPosition = null;
 
-      _showError(
-        'The request took too long. Please try again.',
-      );
-    } catch (e) {
-      if (_leavingPage || _loginHandled) return;
-
-      _stopPolling();
-      _currentPosition = null;
-
-      // Do not expose raw server exceptions or coordinates.
       debugPrint(
-        '[SWIFTCARE FACE LOGIN] Unable to start verification.',
+        '[FACE LOGIN] CREATE SESSION TIMEOUT',
       );
 
-      _showError(
-        'Unable to complete secure sign in. Please try again.',
+      if (mounted) {
+        setState(() {
+          _isStarting = false;
+          _isChecking = false;
+          _diditRunning = false;
+          _errorMessage =
+              'The secure sign-in request timed out. '
+              'Please check your connection and try again.';
+        });
+      }
+    } on FaceLoginException catch (e) {
+      if (_leavingPage || _loginHandled) {
+        return;
+      }
+
+      _stopPolling();
+
+      debugPrint(
+        '========================================',
       );
+      debugPrint(
+        '[FACE LOGIN] FACE LOGIN EXCEPTION',
+      );
+      debugPrint(
+        '[FACE LOGIN] STAGE: ${e.stage}',
+      );
+      debugPrint(
+        '[FACE LOGIN] STATUS: ${e.statusCode}',
+      );
+      debugPrint(
+        '[FACE LOGIN] MESSAGE: ${e.message}',
+      );
+      debugPrint(
+        '[FACE LOGIN] ORIGINAL: ${e.originalError}',
+      );
+      debugPrint(
+        '========================================',
+      );
+
+      if (mounted) {
+        setState(() {
+          _isStarting = false;
+          _isChecking = false;
+          _diditRunning = false;
+
+          _errorMessage = _friendlyFaceLoginError(e);
+        });
+      }
+    } catch (e, stackTrace) {
+      if (_leavingPage || _loginHandled) {
+        return;
+      }
+
+      _stopPolling();
+
+      debugPrint(
+        '========================================',
+      );
+      debugPrint(
+        '[FACE LOGIN] UNEXPECTED ERROR',
+      );
+      debugPrint(
+        '[FACE LOGIN] TYPE: ${e.runtimeType}',
+      );
+      debugPrint(
+        '[FACE LOGIN] ERROR: $e',
+      );
+      debugPrint(
+        '[FACE LOGIN] STACK TRACE:\n$stackTrace',
+      );
+      debugPrint(
+        '========================================',
+      );
+
+      if (mounted) {
+        setState(() {
+          _isStarting = false;
+          _isChecking = false;
+          _diditRunning = false;
+
+          _errorMessage =
+              'Unable to complete secure sign in. '
+              'Please try again.';
+        });
+      }
     }
   }
 
@@ -234,8 +685,17 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   // DIDIT RESULT
   // ============================================================
 
-  Future<void> _handleDiditResult(dynamic result) async {
-    if (_leavingPage || _loginHandled) return;
+  Future<void> _handleDiditResult(
+    dynamic result,
+  ) async {
+    if (_leavingPage || _loginHandled) {
+      return;
+    }
+
+    debugPrint(
+      '[DIDIT] Verification result: '
+      '${result.runtimeType}',
+    );
 
     if (result is VerificationCompleted) {
       if (mounted) {
@@ -245,34 +705,64 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         });
       }
 
-      // The backend decides whether verification succeeded.
+      // Backend remains authoritative.
+      //
+      // IMPORTANT:
+      // Do NOT stop here. Didit may have completed while the
+      // backend is still processing the verification.
+      _startPolling();
+
       return;
     }
 
     if (result is VerificationCancelled) {
       _stopPolling();
-      _currentPosition = null;
 
-      _showError('Face verification was cancelled.');
+      if (mounted) {
+        setState(() {
+          _diditRunning = false;
+          _isChecking = false;
+          _errorMessage =
+              'Face verification was cancelled. '
+              'You can try again when you are ready.';
+        });
+      }
+
       return;
     }
 
     if (result is VerificationFailed) {
-      _stopPolling();
-      _currentPosition = null;
-
-      _showError(
-        'Face verification could not be completed. '
-        'Please try again.',
+      debugPrint(
+        '[DIDIT] VerificationFailed received.',
       );
+
+      _stopPolling();
+
+      if (mounted) {
+        setState(() {
+          _diditRunning = false;
+          _isChecking = false;
+          _errorMessage =
+              'Face verification could not be completed. '
+              'Please try again.';
+        });
+      }
+
       return;
     }
 
+    // Unknown Didit result.
+    //
+    // Do not immediately fail the entire login. The backend may
+    // still know the actual verification state.
     if (mounted) {
       setState(() {
         _diditRunning = false;
+        _isChecking = true;
       });
     }
+
+    _startPolling();
   }
 
   // ============================================================
@@ -284,16 +774,23 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
 
     if (_sessionId == null ||
         _sessionId!.isEmpty ||
-        _leavingPage) {
+        _leavingPage ||
+        _loginHandled) {
       return;
     }
 
+    debugPrint(
+      '[FACE LOGIN] Starting status polling for session.',
+    );
+
+    // Check immediately.
     _checkFaceLoginStatus();
 
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 3),
+      _pollInterval,
       (_) {
-        if (!_leavingPage && !_loginHandled) {
+        if (!_leavingPage &&
+            !_loginHandled) {
           _checkFaceLoginStatus();
         }
       },
@@ -306,7 +803,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   }
 
   // ============================================================
-  // STATUS URI WITH COORDINATES
+  // STATUS URI
   // ============================================================
 
   Uri _buildFaceLoginStatusUri(
@@ -320,9 +817,12 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
 
     return baseUri.replace(
       queryParameters: {
-        'latitude': position.latitude.toString(),
-        'longitude': position.longitude.toString(),
-        'accuracy': position.accuracy.toString(),
+        'latitude':
+            position.latitude.toString(),
+        'longitude':
+            position.longitude.toString(),
+        'accuracy':
+            position.accuracy.toString(),
       },
     );
   }
@@ -350,54 +850,87 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
     _pollInProgress = true;
 
     try {
-      // Matches:
-      //
-      // [HttpGet("face-login/status/{sessionId}")]
-      //
-      // [FromQuery] double? latitude
-      // [FromQuery] double? longitude
-      // [FromQuery] double? accuracy
-      //
       final uri = _buildFaceLoginStatusUri(
         sessionId,
         position,
       );
 
-      final response = await http.get(
-        uri,
-        headers: const {
-          'Accept': 'application/json',
-        },
-      ).timeout(const Duration(seconds: 15));
+      debugPrint(
+        '[FACE LOGIN] Checking verification status...',
+      );
 
-      if (_leavingPage || _loginHandled) return;
+      final response = await http
+          .get(
+            uri,
+            headers: const {
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(_requestTimeout);
+
+      if (_leavingPage || _loginHandled) {
+        return;
+      }
+
+      debugPrint(
+        '[FACE LOGIN] Status HTTP '
+        '${response.statusCode}',
+      );
+
+      debugPrint(
+        '[FACE LOGIN] Status response: '
+        '${response.body}',
+      );
 
       final data = _decodeResponse(response);
 
       // ========================================================
-      // SUCCESSFUL AUTHENTICATION
+      // SUCCESSFUL HTTP RESPONSE
       // ========================================================
 
-      if (response.statusCode == 200 && data != null) {
+      if (response.statusCode == 200 &&
+          data != null) {
         final authenticated =
             data['authenticated'] == true;
 
         if (authenticated) {
-          final token = data['token']?.toString();
+          final token =
+              data['token']?.toString();
 
-          if (token == null || token.isEmpty) {
+          if (token == null ||
+              token.trim().isEmpty) {
+            debugPrint(
+              '[FACE LOGIN] Backend says authenticated '
+              'but no JWT token was returned.',
+            );
+
             return;
           }
+
+          debugPrint(
+            '[FACE LOGIN] AUTHENTICATED = TRUE',
+          );
 
           _loginHandled = true;
           _stopPolling();
 
           await _handleSuccessfulLogin(data);
+
           return;
         }
 
-        // Still processing.
-        if (data['completed'] != true) {
+        // ------------------------------------------------------
+        // Backend still processing.
+        // ------------------------------------------------------
+
+        final completed =
+            data['completed'] == true;
+
+        if (!completed) {
+          debugPrint(
+            '[FACE LOGIN] Verification still processing.',
+          );
+
           if (mounted) {
             setState(() {
               _isChecking = true;
@@ -407,56 +940,157 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
           return;
         }
 
-        // The backend has finished but did not authenticate.
-        _stopPolling();
-        _currentPosition = null;
+        // ------------------------------------------------------
+        // Backend completed but authentication failed.
+        // ------------------------------------------------------
 
-        _showError(
-          _serverMessage(
-            data,
-            'Face verification was not successful.',
-          ),
+        debugPrint(
+          '[FACE LOGIN] Backend completed without authentication.',
         );
+
+        _stopPolling();
+
+        if (mounted) {
+          setState(() {
+            _isChecking = false;
+            _diditRunning = false;
+            _errorMessage = _serverMessage(
+              data,
+              'Face verification was not successful. '
+              'Please try again.',
+            );
+          });
+        }
 
         return;
       }
 
       // ========================================================
-      // AUTHENTICATION FAILED
+      // 404
+      //
+      // IMPORTANT:
+      // Do NOT stop polling.
+      //
+      // A session may not yet be available/processed when the
+      // first status request is made.
+      // ========================================================
+
+      if (response.statusCode == 404) {
+        debugPrint(
+          '[FACE LOGIN] Status returned 404. '
+          'Keeping session alive and retrying.',
+        );
+
+        if (mounted) {
+          setState(() {
+            _isChecking = true;
+          });
+        }
+
+        return;
+      }
+
+      // ========================================================
+      // CLIENT AUTHENTICATION ERROR
       // ========================================================
 
       if (response.statusCode == 400 ||
           response.statusCode == 401 ||
-          response.statusCode == 403 ||
-          response.statusCode == 404) {
-        _stopPolling();
-        _currentPosition = null;
-
-        _showError(
-          'Face verification was not successful. '
-          'Please try again.',
+          response.statusCode == 403) {
+        debugPrint(
+          '[FACE LOGIN] Permanent client/auth error: '
+          '${response.statusCode}',
         );
+
+        _stopPolling();
+
+        if (mounted) {
+          setState(() {
+            _isChecking = false;
+            _diditRunning = false;
+
+            _errorMessage = _serverMessage(
+              data,
+              'Face verification could not be completed. '
+              'Please try again.',
+            );
+          });
+        }
 
         return;
       }
 
       // ========================================================
       // SERVER ERROR
+      //
+      // Don't immediately kill the login on a transient 5xx.
+      // Keep polling.
       // ========================================================
 
       if (response.statusCode >= 500) {
-        _stopPolling();
-        _currentPosition = null;
-
-        _showError(
-          'The SwiftCare server encountered an error. '
-          'Please try again.',
+        debugPrint(
+          '[FACE LOGIN] Server returned '
+          '${response.statusCode}. '
+          'Will retry.',
         );
+
+        if (mounted) {
+          setState(() {
+            _isChecking = true;
+          });
+        }
+
+        return;
       }
+
+      // ========================================================
+      // UNEXPECTED HTTP STATUS
+      // ========================================================
+
+      debugPrint(
+        '[FACE LOGIN] Unexpected HTTP status: '
+        '${response.statusCode}',
+      );
     } on TimeoutException {
-      // Retry during the next polling cycle.
-    } catch (_) {
-      // Retry transient network errors.
+      debugPrint(
+        '[FACE LOGIN] Status polling timed out. '
+        'Will retry.',
+      );
+
+      // IMPORTANT:
+      // Don't kill the login because one polling request timed out.
+      if (mounted && !_loginHandled) {
+        setState(() {
+          _isChecking = true;
+        });
+      }
+    } catch (e, stackTrace) {
+      debugPrint(
+        '========================================',
+      );
+      debugPrint(
+        '[FACE LOGIN] STATUS POLLING ERROR',
+      );
+      debugPrint(
+        '[FACE LOGIN] TYPE: ${e.runtimeType}',
+      );
+      debugPrint(
+        '[FACE LOGIN] ERROR: $e',
+      );
+      debugPrint(
+        '[FACE LOGIN] STACK TRACE:\n$stackTrace',
+      );
+      debugPrint(
+        '========================================',
+      );
+
+      // Transient network failure.
+      // Keep polling.
+      if (mounted && !_loginHandled) {
+        setState(() {
+          _isChecking = true;
+        });
+      }
     } finally {
       _pollInProgress = false;
     }
@@ -469,16 +1103,24 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   Map<String, dynamic>? _decodeResponse(
     http.Response response,
   ) {
-    if (response.body.isEmpty) return null;
+    if (response.body.isEmpty) {
+      return null;
+    }
 
     try {
-      final decoded = jsonDecode(response.body);
+      final decoded = jsonDecode(
+        response.body,
+      );
 
       if (decoded is Map) {
-        return Map<String, dynamic>.from(decoded);
+        return Map<String, dynamic>.from(
+          decoded,
+        );
       }
-    } catch (_) {
-      return null;
+    } catch (e) {
+      debugPrint(
+        '[HTTP] JSON decode failed: $e',
+      );
     }
 
     return null;
@@ -488,10 +1130,14 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
     Map<String, dynamic>? data,
     String fallback,
   ) {
-    if (data == null) return fallback;
+    if (data == null) {
+      return fallback;
+    }
 
     final message =
-        data['message'] ?? data['error'] ?? data['detail'];
+        data['message'] ??
+        data['error'] ??
+        data['detail'];
 
     if (message is String &&
         message.trim().isNotEmpty) {
@@ -502,13 +1148,49 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   }
 
   // ============================================================
+  // FRIENDLY ERROR
+  // ============================================================
+
+  String _friendlyFaceLoginError(
+    FaceLoginException exception,
+  ) {
+    switch (exception.stage) {
+      case 'CREATE_SESSION':
+        if (exception.statusCode == 401 ||
+            exception.statusCode == 403) {
+          return 'SwiftCare could not authorize secure sign in. '
+              'Please try again.';
+        }
+
+        if (exception.statusCode != null &&
+            exception.statusCode! >= 500) {
+          return 'The SwiftCare server could not start secure sign in. '
+              'Please try again.';
+        }
+
+        return exception.message;
+
+      case 'DIDIT_SDK':
+        return 'The secure identity verification screen '
+            'could not be opened. '
+            'Please try again.';
+
+      default:
+        return 'Unable to complete secure sign in. '
+            'Please try again.';
+    }
+  }
+
+  // ============================================================
   // SUCCESS
   // ============================================================
 
   Future<void> _handleSuccessfulLogin(
     Map<String, dynamic> data,
   ) async {
-    if (_leavingPage) return;
+    if (_leavingPage) {
+      return;
+    }
 
     _currentPosition = null;
 
@@ -518,6 +1200,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         _isChecking = false;
         _isSuccess = true;
         _diditRunning = false;
+        _errorMessage = null;
       });
     }
 
@@ -525,40 +1208,59 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       const Duration(milliseconds: 900),
     );
 
-    if (_leavingPage || !mounted) return;
+    if (_leavingPage || !mounted) {
+      return;
+    }
 
     Navigator.of(context).pop(data);
   }
 
   // ============================================================
-  // RETRY / CLOSE / ERROR
+  // RETRY
   // ============================================================
 
   Future<void> _retry() async {
-    if (_leavingPage) return;
-    await _startFaceLogin();
+    if (_leavingPage || _requestingLocation) {
+      return;
+    }
+
+    _stopPolling();
+
+    _loginHandled = false;
+    _pollInProgress = false;
+    _sessionId = null;
+    _currentPosition = null;
+
+    if (mounted) {
+      setState(() {
+        _errorMessage = null;
+        _isStarting = false;
+        _isChecking = false;
+        _isSuccess = false;
+        _diditRunning = false;
+      });
+    }
+
+    // Re-check the real Android permission. If permission was denied,
+    // Geolocator will trigger the native Android permission dialog.
+    await _prepareLocation();
   }
 
+  // ============================================================
+  // CLOSE
+  // ============================================================
+
   void _closePage() {
-    if (_leavingPage) return;
+    if (_leavingPage) {
+      return;
+    }
 
     _leavingPage = true;
+
     _stopPolling();
     _currentPosition = null;
 
     Navigator.of(context).pop();
-  }
-
-  void _showError(String message) {
-    if (_leavingPage || !mounted) return;
-
-    setState(() {
-      _isStarting = false;
-      _isChecking = false;
-      _isSuccess = false;
-      _diditRunning = false;
-      _errorMessage = message;
-    });
   }
 
   // ============================================================
@@ -606,10 +1308,12 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         children: [
           Material(
             color: _lightGreen,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius:
+                BorderRadius.circular(14),
             child: InkWell(
               onTap: _closePage,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius:
+                  BorderRadius.circular(14),
               child: const SizedBox(
                 width: 46,
                 height: 46,
@@ -623,7 +1327,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
           const SizedBox(width: 14),
           const Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 Text(
                   'Face Verification',
@@ -649,7 +1354,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
             height: 46,
             decoration: BoxDecoration(
               color: _lightGreen,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius:
+                  BorderRadius.circular(14),
             ),
             child: const Icon(
               Icons.verified_user_rounded,
@@ -686,7 +1392,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment:
+              MainAxisAlignment.center,
           children: [
             Container(
               width: 120,
@@ -701,7 +1408,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
               ),
               child: Icon(
                 _diditRunning
-                    ? Icons.face_retouching_natural_rounded
+                    ? Icons
+                        .face_retouching_natural_rounded
                     : Icons.face_rounded,
                 size: 62,
                 color: _darkGreen,
@@ -742,21 +1450,27 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
               const SizedBox(
                 width: 34,
                 height: 34,
-                child: CircularProgressIndicator(
+                child:
+                    CircularProgressIndicator(
                   strokeWidth: 3,
                   valueColor:
-                      AlwaysStoppedAnimation<Color>(_green),
+                      AlwaysStoppedAnimation<Color>(
+                    _green,
+                  ),
                 ),
               ),
             const SizedBox(height: 22),
             Container(
-              padding: const EdgeInsets.symmetric(
+              padding:
+                  const EdgeInsets.symmetric(
                 horizontal: 18,
                 vertical: 14,
               ),
               decoration: BoxDecoration(
-                color: _lightGreen.withOpacity(0.55),
-                borderRadius: BorderRadius.circular(16),
+                color:
+                    _lightGreen.withOpacity(0.55),
+                borderRadius:
+                    BorderRadius.circular(16),
               ),
               child: const Row(
                 children: [
@@ -795,7 +1509,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment:
+              MainAxisAlignment.center,
           children: [
             Container(
               width: 110,
@@ -839,7 +1554,9 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
               height: 54,
               child: ElevatedButton.icon(
                 onPressed: _retry,
-                icon: const Icon(Icons.refresh_rounded),
+                icon: const Icon(
+                  Icons.refresh_rounded,
+                ),
                 label: const Text(
                   'Try Again',
                   style: TextStyle(
@@ -851,8 +1568,10 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
                   backgroundColor: _darkGreen,
                   foregroundColor: Colors.white,
                   elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+                  shape:
+                      RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.circular(16),
                   ),
                 ),
               ),
@@ -863,11 +1582,16 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
               height: 52,
               child: OutlinedButton(
                 onPressed: _closePage,
-                style: OutlinedButton.styleFrom(
+                style:
+                    OutlinedButton.styleFrom(
                   foregroundColor: _darkGreen,
-                  side: const BorderSide(color: _border),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+                  side: const BorderSide(
+                    color: _border,
+                  ),
+                  shape:
+                      RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.circular(16),
                   ),
                 ),
                 child: const Text(
@@ -894,7 +1618,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment:
+              MainAxisAlignment.center,
           children: [
             Container(
               width: 120,
@@ -946,5 +1671,33 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         ),
       ),
     );
+  }
+}
+
+// ================================================================
+// FACE LOGIN EXCEPTION
+// ================================================================
+
+class FaceLoginException implements Exception {
+  final String stage;
+  final String message;
+  final int? statusCode;
+  final Object? originalError;
+
+  FaceLoginException({
+    required this.stage,
+    required this.message,
+    this.statusCode,
+    this.originalError,
+  });
+
+  @override
+  String toString() {
+    return 'FaceLoginException('
+        'stage=$stage, '
+        'statusCode=$statusCode, '
+        'message=$message, '
+        'originalError=$originalError'
+        ')';
   }
 }

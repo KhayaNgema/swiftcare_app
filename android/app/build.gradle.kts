@@ -1,13 +1,14 @@
 plugins {
     id("com.android.application")
     id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
     namespace = "com.example.swiftcare_volunteer_app"
-    compileSdk = flutter.compileSdkVersion
+
+    compileSdk = 36
+
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -21,8 +22,10 @@ android {
 
     defaultConfig {
         applicationId = "com.example.swiftcare_volunteer_app"
+
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 36
+
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
@@ -35,7 +38,12 @@ android {
 
     buildTypes {
         release {
+            // Temporary testing signing.
             signingConfig = signingConfigs.getByName("debug")
+
+            // Keep disabled while troubleshooting.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

@@ -18,7 +18,7 @@ class _DailyTasksPageState extends State<DailyTasksPage> {
   // ============================================================
 
   static const String _baseUrl =
-      'https://flop-enjoyment-unexposed.ngrok-free.dev';
+      'https://swiftcareapi20261002021942-bxfgbwbsf4agendr.centralindia-01.azurewebsites.net';
 
   // ============================================================
   // STATE

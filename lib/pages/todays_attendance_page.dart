@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import 'package:swiftcare_volunteer_app/services/auth_storage.dart';
 
@@ -15,6 +18,13 @@ class TodaysAttendancePage extends StatefulWidget {
 class _TodaysAttendancePageState
     extends State<TodaysAttendancePage> {
   // ============================================================
+  // API
+  // ============================================================
+
+  static const String _baseUrl =
+      'https://swiftcareapi20261002021942-bxfgbwbsf4agendr.centralindia-01.azurewebsites.net';
+
+  // ============================================================
   // ATTENDANCE
   // ============================================================
 
@@ -28,10 +38,13 @@ class _TodaysAttendancePageState
   int? _volunteerRosterShiftId;
 
   int _lateMinutes = 0;
+  int _earlyDepartureMinutes = 0;
 
   String? _checkInTime;
+  String? _checkOutTime;
 
   bool _loading = true;
+  bool _checkingOut = false;
 
   // ============================================================
   // INIT
@@ -120,6 +133,253 @@ class _TodaysAttendancePageState
   }
 
   // ============================================================
+  // CHECK OUT
+  // ============================================================
+
+  Future<void> _checkOut() async {
+    // ============================================================
+    // VALIDATE ATTENDANCE
+    // ============================================================
+
+    if (_attendanceId == null ||
+        _attendanceId! <= 0) {
+      _showMessage(
+        'No attendance record was found.',
+        isError: true,
+      );
+
+      return;
+    }
+
+    // ============================================================
+    // PREVENT DOUBLE CLICK
+    // ============================================================
+
+    if (_checkingOut) {
+      return;
+    }
+
+    // ============================================================
+    // CONFIRM CHECK OUT
+    // ============================================================
+
+    final shouldCheckOut =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) {
+            return AlertDialog(
+              title: const Text(
+                'Check Out',
+              ),
+
+              content: const Text(
+                'Are you sure you want to check out of your shift?',
+              ),
+
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context)
+                        .pop(false);
+                  },
+                  child: const Text(
+                    'Cancel',
+                  ),
+                ),
+
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context)
+                        .pop(true);
+                  },
+                  style:
+                      ElevatedButton.styleFrom(
+                    backgroundColor:
+                        const Color(
+                      0xFF1B5E20,
+                    ),
+                    foregroundColor:
+                        Colors.white,
+                  ),
+                  child: const Text(
+                    'Check Out',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+
+    if (shouldCheckOut != true) {
+      return;
+    }
+
+    // ============================================================
+    // START CHECKOUT
+    // ============================================================
+
+    setState(() {
+      _checkingOut = true;
+    });
+
+    try {
+      // ==========================================================
+      // GET JWT TOKEN
+      // ==========================================================
+
+      final token =
+          await AuthStorage.getToken();
+
+      if (token == null ||
+          token.trim().isEmpty) {
+        _showMessage(
+          'Your session has expired. Please log in again.',
+          isError: true,
+        );
+
+        return;
+      }
+
+      // ==========================================================
+      // API REQUEST
+      // ==========================================================
+
+      final response =
+          await http.post(
+        Uri.parse(
+          '$_baseUrl/api/Attendance/check-out',
+        ),
+        headers: {
+          'Content-Type':
+              'application/json',
+
+          'Authorization':
+              'Bearer ${token.trim()}',
+        },
+        body: jsonEncode({
+          'attendanceId':
+              _attendanceId,
+        }),
+      );
+
+      // ==========================================================
+      // PARSE RESPONSE
+      // ==========================================================
+
+      Map<String, dynamic>? data;
+
+      if (response.body
+          .trim()
+          .isNotEmpty) {
+        try {
+          data =
+              jsonDecode(
+                response.body,
+              )
+              as Map<String, dynamic>;
+        } catch (_) {
+          data = null;
+        }
+      }
+
+      // ==========================================================
+      // SUCCESS
+      // ==========================================================
+
+      if (response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          data != null) {
+        final attendance =
+            data['attendance']
+                as Map<String, dynamic>?;
+
+        final checkedOut =
+            data['checkedOut'] == true;
+
+        final alreadyCheckedOut =
+            data['alreadyCheckedOut'] == true;
+
+        if (checkedOut ||
+            alreadyCheckedOut) {
+          final checkOutTime =
+              attendance?['checkOutTime']
+                  ?.toString();
+
+          final earlyDepartureMinutes =
+              attendance?[
+                    'earlyDepartureMinutes']
+                  as int? ??
+              0;
+
+          if (!mounted) {
+            return;
+          }
+
+          setState(() {
+            _attendanceCheckedIn =
+                false;
+
+            _attendanceAlreadyCheckedIn =
+                false;
+
+            _attendanceStatus =
+                'CheckedOut';
+
+            _checkOutTime =
+                checkOutTime;
+
+            _earlyDepartureMinutes =
+                earlyDepartureMinutes;
+
+            _checkingOut = false;
+          });
+
+          _showMessage(
+            alreadyCheckedOut
+                ? 'You have already checked out.'
+                : data['message']?.toString() ??
+                    'You have been successfully checked out.',
+          );
+
+          return;
+        }
+      }
+
+      // ==========================================================
+      // API ERROR
+      // ==========================================================
+
+      final message =
+          data?['message']?.toString() ??
+          'Unable to check out. Please try again.';
+
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(
+        message,
+        isError: true,
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(
+        'Unable to connect to the attendance service.',
+        isError: true,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _checkingOut = false;
+        });
+      }
+    }
+  }
+
+  // ============================================================
   // REFRESH
   // ============================================================
 
@@ -129,6 +389,37 @@ class _TodaysAttendancePageState
     });
 
     await _loadAttendance();
+  }
+
+  // ============================================================
+  // MESSAGE
+  // ============================================================
+
+  void _showMessage(
+    String message, {
+    bool isError = false,
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            message,
+          ),
+          backgroundColor:
+              isError
+                  ? Colors.red.shade700
+                  : const Color(
+                      0xFF2E7D32,
+                    ),
+          behavior:
+              SnackBarBehavior.floating,
+        ),
+      );
   }
 
   // ============================================================
@@ -212,6 +503,12 @@ class _TodaysAttendancePageState
                     ),
 
                     _buildAttendanceDetails(),
+
+                    const SizedBox(
+                      height: 14,
+                    ),
+
+                    _buildCheckoutButton(),
                   ],
                 ),
               ),
@@ -358,13 +655,6 @@ class _TodaysAttendancePageState
           Colors.white;
       icon =
           Icons.person_off;
-    } else if (isLate) {
-      background =
-          const Color(0xFFF9A825);
-      foreground =
-          Colors.white;
-      icon =
-          Icons.schedule;
     } else if (isCheckedOut) {
       background =
           const Color(0xFF00897B);
@@ -372,6 +662,13 @@ class _TodaysAttendancePageState
           Colors.white;
       icon =
           Icons.logout;
+    } else if (isLate) {
+      background =
+          const Color(0xFFF9A825);
+      foreground =
+          Colors.white;
+      icon =
+          Icons.schedule;
     } else if (checkedIn) {
       background =
           const Color(0xFF2E7D32);
@@ -500,6 +797,11 @@ class _TodaysAttendancePageState
         _attendanceCheckedIn ||
             _attendanceAlreadyCheckedIn;
 
+    final checkedOut =
+        _attendanceStatus
+            .toLowerCase()
+            .contains('checked');
+
     return Container(
       width: double.infinity,
       padding:
@@ -542,7 +844,8 @@ class _TodaysAttendancePageState
             icon:
                 Icons.login_outlined,
             label: 'Check In',
-            value: checkedIn
+            value: checkedIn ||
+                    checkedOut
                 ? _formatCheckInTime(
                     _checkInTime,
                   )
@@ -562,7 +865,163 @@ class _TodaysAttendancePageState
                     ? '$_lateMinutes minutes'
                     : 'On time',
           ),
+
+          if (_checkOutTime != null) ...[
+            const SizedBox(
+              height: 10,
+            ),
+
+            _buildDetailRow(
+              icon:
+                  Icons.logout_outlined,
+              label: 'Check Out',
+              value:
+                  _formatCheckOutTime(
+                _checkOutTime,
+              ),
+            ),
+          ],
+
+          if (_earlyDepartureMinutes > 0) ...[
+            const SizedBox(
+              height: 10,
+            ),
+
+            _buildDetailRow(
+              icon:
+                  Icons.warning_amber_rounded,
+              label:
+                  'Early Departure',
+              value:
+                  '$_earlyDepartureMinutes minutes',
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // CHECKOUT BUTTON
+  // ============================================================
+
+  Widget _buildCheckoutButton() {
+    final checkedOut =
+        _attendanceStatus
+                .toLowerCase()
+                .contains(
+                  'checked out',
+                ) ||
+            _attendanceStatus
+                .toLowerCase()
+                .contains(
+                  'checkout',
+                );
+
+    final canCheckOut =
+        (_attendanceCheckedIn ||
+            _attendanceAlreadyCheckedIn) &&
+        !checkedOut &&
+        _attendanceId != null &&
+        !_checkingOut;
+
+    if (checkedOut) {
+      return Container(
+        width: double.infinity,
+        padding:
+            const EdgeInsets.symmetric(
+          vertical: 15,
+        ),
+        decoration:
+            BoxDecoration(
+          color:
+              const Color(0xFFE0F2F1),
+          borderRadius:
+              BorderRadius.circular(15),
+          border: Border.all(
+            color:
+                const Color(0xFF80CBC4),
+          ),
+        ),
+        child: const Row(
+          mainAxisAlignment:
+              MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.check_circle,
+              color:
+                  Color(0xFF00897B),
+            ),
+
+            SizedBox(
+              width: 8,
+            ),
+
+            Text(
+              'Checked Out',
+              style:
+                  TextStyle(
+                color:
+                    Color(0xFF00695C),
+                fontSize: 15,
+                fontWeight:
+                    FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!canCheckOut) {
+      return const SizedBox.shrink();
+    }
+
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: ElevatedButton.icon(
+        onPressed:
+            _checkingOut
+                ? null
+                : _checkOut,
+        icon: _checkingOut
+            ? const SizedBox(
+                width: 19,
+                height: 19,
+                child:
+                    CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : const Icon(
+                Icons.logout,
+              ),
+        label: Text(
+          _checkingOut
+              ? 'Checking Out...'
+              : 'Check Out',
+        ),
+        style:
+            ElevatedButton.styleFrom(
+          backgroundColor:
+              const Color(0xFF1B5E20),
+          foregroundColor:
+              Colors.white,
+          disabledBackgroundColor:
+              const Color(0xFF81A985),
+          disabledForegroundColor:
+              Colors.white,
+          elevation: 0,
+          shape:
+              RoundedRectangleBorder(
+            borderRadius:
+                BorderRadius.circular(
+              15,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -674,6 +1133,41 @@ class _TodaysAttendancePageState
     if (value == null ||
         value.trim().isEmpty) {
       return 'Checked in';
+    }
+
+    try {
+      final parsed =
+          DateTime.parse(value);
+
+      final local =
+          parsed.toLocal();
+
+      final hour =
+          local.hour
+              .toString()
+              .padLeft(2, '0');
+
+      final minute =
+          local.minute
+              .toString()
+              .padLeft(2, '0');
+
+      return '$hour:$minute';
+    } catch (_) {
+      return value;
+    }
+  }
+
+  // ============================================================
+  // FORMAT CHECK-OUT TIME
+  // ============================================================
+
+  String _formatCheckOutTime(
+    String? value,
+  ) {
+    if (value == null ||
+        value.trim().isEmpty) {
+      return 'Checked out';
     }
 
     try {

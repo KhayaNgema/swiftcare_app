@@ -19,7 +19,7 @@ class _UpcomingTasksPageState extends State<UpcomingTasksPage> {
   // ============================================================
 
   static const String _apiBaseUrl =
-      'https://flop-enjoyment-unexposed.ngrok-free.dev';
+      'https://swiftcareapi20261002021942-bxfgbwbsf4agendr.centralindia-01.azurewebsites.net';
 
   bool _isLoading = true;
   String? _errorMessage;
