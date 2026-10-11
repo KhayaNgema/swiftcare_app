@@ -18,7 +18,7 @@ class _WeeklyTasksPageState extends State<WeeklyTasksPage> {
   // ============================================================
 
   static const String _apiBaseUrl =
-      'https://swiftcareapi20261002021942-bxfgbwbsf4agendr.centralindia-01.azurewebsites.net';
+      'https://swiftcareapi20261008091404-a5c8ade5cfaahea4.spaincentral-01.azurewebsites.net';
 
   bool _isLoading = true;
   String? _errorMessage;

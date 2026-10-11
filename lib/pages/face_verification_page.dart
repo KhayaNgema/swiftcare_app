@@ -20,7 +20,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   // ============================================================
 
   static const String _apiBaseUrl =
-      'https://swiftcareapi20261002021942-bxfgbwbsf4agendr.centralindia-01.azurewebsites.net';
+      'https://swiftcareapi20261008091404-a5c8ade5cfaahea4.spaincentral-01.azurewebsites.net';
 
   // ============================================================
   // COLORS
@@ -73,8 +73,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   void initState() {
     super.initState();
 
-    // Request Android's real location permission immediately when
-    // this page opens. There is NO custom "Allow Location" page.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_leavingPage) {
         _prepareLocation();
@@ -114,10 +112,10 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       }
 
       // ----------------------------------------------------------
-      // 1. CHECK AND REQUEST THE REAL ANDROID PERMISSION FIRST.
+      // 1. CHECK LOCATION PERMISSION
       //
-      // This triggers Android's native permission dialog.
-      // There is no custom permission page in SwiftCare.
+      // Works on both Android and iOS through Geolocator.
+      // The native permission dialog is shown by the OS.
       // ----------------------------------------------------------
 
       LocationPermission permission =
@@ -127,12 +125,17 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         return;
       }
 
+      // ----------------------------------------------------------
+      // 2. REQUEST LOCATION PERMISSION
+      // ----------------------------------------------------------
+
       if (permission == LocationPermission.denied) {
         debugPrint(
-          '[LOCATION] Permission denied. Requesting Android permission...',
+          '[LOCATION] Permission denied. Requesting native permission...',
         );
 
-        permission = await Geolocator.requestPermission();
+        permission =
+            await Geolocator.requestPermission();
 
         if (_leavingPage || !mounted) {
           return;
@@ -144,7 +147,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       }
 
       // ----------------------------------------------------------
-      // 2. USER DENIED THE ANDROID PERMISSION.
+      // 3. USER DENIED LOCATION PERMISSION
       // ----------------------------------------------------------
 
       if (permission == LocationPermission.denied) {
@@ -152,9 +155,9 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
           setState(() {
             _errorMessage =
                 'Location permission was denied. '
-                'SwiftCare needs location permission to securely '
-                'complete sign in. Please try again and tap Allow '
-                'when Android asks for permission.';
+                'SwiftCare needs your location to securely '
+                'complete sign in. Please allow Location '
+                'permission and try again.';
           });
         }
 
@@ -162,16 +165,14 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       }
 
       // ----------------------------------------------------------
-      // 3. USER PERMANENTLY DENIED THE ANDROID PERMISSION.
-      //
-      // Open the real Android app settings. There is still no
-      // custom location permission page.
+      // 4. USER PERMANENTLY DENIED LOCATION PERMISSION
       // ----------------------------------------------------------
 
-      if (permission == LocationPermission.deniedForever) {
+      if (permission ==
+          LocationPermission.deniedForever) {
         debugPrint(
           '[LOCATION] Permission permanently denied. '
-          'Opening Android app settings...',
+          'Opening app settings...',
         );
 
         try {
@@ -189,7 +190,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         setState(() {
           _errorMessage =
               'Location permission is blocked for SwiftCare. '
-              'Open SwiftCare settings and allow Location, '
+              'Open SwiftCare settings, allow Location, '
               'then tap Try Again.';
         });
 
@@ -197,7 +198,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       }
 
       // ----------------------------------------------------------
-      // 4. CHECK DEVICE LOCATION SERVICES AFTER PERMISSION.
+      // 5. CHECK DEVICE LOCATION SERVICES
       // ----------------------------------------------------------
 
       final serviceEnabled =
@@ -210,7 +211,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       if (!serviceEnabled) {
         debugPrint(
           '[LOCATION] Location services are disabled. '
-          'Opening device location settings...',
+          'Opening location settings...',
         );
 
         try {
@@ -228,15 +229,15 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         setState(() {
           _errorMessage =
               'Location services are turned off. '
-              'Please enable Location on your device and tap '
-              'Try Again.';
+              'Please enable Location on your device '
+              'and tap Try Again.';
         });
 
         return;
       }
 
       // ----------------------------------------------------------
-      // 5. GET CURRENT LOCATION.
+      // 6. GET CURRENT LOCATION
       // ----------------------------------------------------------
 
       if (mounted) {
@@ -247,7 +248,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       }
 
       debugPrint(
-        '[LOCATION] Permission granted. Getting current location...',
+        '[LOCATION] Permission granted. '
+        'Getting current location...',
       );
 
       final position =
@@ -274,7 +276,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       );
 
       // ----------------------------------------------------------
-      // 6. LOCATION IS READY — START FACE LOGIN.
+      // 7. LOCATION READY — START FACE LOGIN
       // ----------------------------------------------------------
 
       await _startFaceLogin();
@@ -287,7 +289,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         _isStarting = false;
         _errorMessage =
             'We could not get your location in time. '
-            'Please make sure Location is enabled and try again.';
+            'Please make sure Location is enabled '
+            'and try again.';
       });
     } on LocationServiceDisabledException {
       if (_leavingPage || !mounted) {
@@ -507,11 +510,12 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       }
 
       // ========================================================
-      // OPEN DIDIT FIRST
+      // OPEN DIDIT
       //
-      // We deliberately open Didit before starting the polling
-      // timer. This avoids an early status request killing the
-      // session before the native SDK has started.
+      // This call is platform-neutral.
+      //
+      // The didit_sdk Flutter package handles the native
+      // Android/iOS implementation.
       // ========================================================
 
       debugPrint(
@@ -525,8 +529,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
             await DiditSdk.startVerification(
           sessionToken,
           config: const DiditConfig(
-            // IMPORTANT:
-            // Keep enabled while diagnosing release APK.
             loggingEnabled: true,
           ),
         );
@@ -560,7 +562,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         throw FaceLoginException(
           stage: 'DIDIT_SDK',
           message:
-              'The secure identity verification service could not be opened.',
+              'The secure identity verification service '
+              'could not be opened.',
           originalError: e,
         );
       }
@@ -571,9 +574,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
 
       // ========================================================
       // START POLLING AFTER DIDIT RETURNS
-      //
-      // We also start it immediately if Didit returned completed,
-      // because the backend may still need a few seconds.
       // ========================================================
 
       if (_sessionId != null &&
@@ -637,8 +637,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
           _isStarting = false;
           _isChecking = false;
           _diditRunning = false;
-
-          _errorMessage = _friendlyFaceLoginError(e);
+          _errorMessage =
+              _friendlyFaceLoginError(e);
         });
       }
     } catch (e, stackTrace) {
@@ -672,7 +672,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
           _isStarting = false;
           _isChecking = false;
           _diditRunning = false;
-
           _errorMessage =
               'Unable to complete secure sign in. '
               'Please try again.';
@@ -706,10 +705,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       }
 
       // Backend remains authoritative.
-      //
-      // IMPORTANT:
-      // Do NOT stop here. Didit may have completed while the
-      // backend is still processing the verification.
       _startPolling();
 
       return;
@@ -751,10 +746,11 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       return;
     }
 
-    // Unknown Didit result.
+    // Unknown result.
     //
-    // Do not immediately fail the entire login. The backend may
-    // still know the actual verification state.
+    // Keep checking the backend because the backend remains
+    // authoritative for authentication.
+
     if (mounted) {
       setState(() {
         _diditRunning = false;
@@ -783,7 +779,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       '[FACE LOGIN] Starting status polling for session.',
     );
 
-    // Check immediately.
     _checkFaceLoginStatus();
 
     _pollTimer = Timer.periodic(
@@ -920,7 +915,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         }
 
         // ------------------------------------------------------
-        // Backend still processing.
+        // BACKEND STILL PROCESSING
         // ------------------------------------------------------
 
         final completed =
@@ -941,7 +936,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         }
 
         // ------------------------------------------------------
-        // Backend completed but authentication failed.
+        // BACKEND COMPLETED BUT AUTHENTICATION FAILED
         // ------------------------------------------------------
 
         debugPrint(
@@ -968,11 +963,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       // ========================================================
       // 404
       //
-      // IMPORTANT:
-      // Do NOT stop polling.
-      //
-      // A session may not yet be available/processed when the
-      // first status request is made.
+      // Keep polling because backend processing may still be
+      // taking place.
       // ========================================================
 
       if (response.statusCode == 404) {
@@ -1023,15 +1015,13 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       // ========================================================
       // SERVER ERROR
       //
-      // Don't immediately kill the login on a transient 5xx.
-      // Keep polling.
+      // Keep polling through transient 5xx errors.
       // ========================================================
 
       if (response.statusCode >= 500) {
         debugPrint(
           '[FACE LOGIN] Server returned '
-          '${response.statusCode}. '
-          'Will retry.',
+          '${response.statusCode}. Will retry.',
         );
 
         if (mounted) {
@@ -1057,8 +1047,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         'Will retry.',
       );
 
-      // IMPORTANT:
-      // Don't kill the login because one polling request timed out.
       if (mounted && !_loginHandled) {
         setState(() {
           _isChecking = true;
@@ -1084,8 +1072,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
         '========================================',
       );
 
-      // Transient network failure.
-      // Keep polling.
       if (mounted && !_loginHandled) {
         setState(() {
           _isChecking = true;
@@ -1172,8 +1158,7 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
 
       case 'DIDIT_SDK':
         return 'The secure identity verification screen '
-            'could not be opened. '
-            'Please try again.';
+            'could not be opened. Please try again.';
 
       default:
         return 'Unable to complete secure sign in. '
@@ -1220,7 +1205,8 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
   // ============================================================
 
   Future<void> _retry() async {
-    if (_leavingPage || _requestingLocation) {
+    if (_leavingPage ||
+        _requestingLocation) {
       return;
     }
 
@@ -1241,8 +1227,6 @@ class _FaceVerificationPageState extends State<FaceVerificationPage> {
       });
     }
 
-    // Re-check the real Android permission. If permission was denied,
-    // Geolocator will trigger the native Android permission dialog.
     await _prepareLocation();
   }
 

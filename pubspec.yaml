@@ -1,5 +1,7 @@
 name: swiftcare_volunteer_app
+
 description: "A new Flutter project."
+
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -14,10 +16,15 @@ dependencies:
   cupertino_icons: ^1.0.8
 
   camera: ^0.11.1
+
   http: ^1.5.0
+
   url_launcher: ^6.3.1
+
   didit_sdk: ^4.9.0
+
   flutter_secure_storage: ^9.2.4
+
   geolocator: ^14.0.2
 
 dev_dependencies:
@@ -25,6 +32,7 @@ dev_dependencies:
     sdk: flutter
 
   flutter_lints: ^6.0.0
+
   flutter_launcher_icons: ^0.14.4
 
 flutter:
@@ -36,6 +44,6 @@ flutter:
 
 flutter_launcher_icons:
   android: true
-  ios: false
-  image_path: assets/icon/swiftcare_logo.png
+  ios: true
+  image_path: assets/icon/swiftcare_app_icon.png
   min_sdk_android: 21

@@ -22,7 +22,7 @@ class _TodaysAttendancePageState
   // ============================================================
 
   static const String _baseUrl =
-      'https://swiftcareapi20261002021942-bxfgbwbsf4agendr.centralindia-01.azurewebsites.net';
+      'https://swiftcareapi20261008091404-a5c8ade5cfaahea4.spaincentral-01.azurewebsites.net';
 
   // ============================================================
   // ATTENDANCE
@@ -247,7 +247,7 @@ class _TodaysAttendancePageState
       final response =
           await http.post(
         Uri.parse(
-          '$_baseUrl/api/Attendance/check-out',
+          '$_baseUrl/api/Auth/check-out',
         ),
         headers: {
           'Content-Type':
